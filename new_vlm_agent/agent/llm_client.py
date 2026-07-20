@@ -59,6 +59,73 @@ class AssistantReply:
 # --------------------------------------------------------------------------- #
 
 _TOOL_TAG_BLOCK_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+# Tool-calling turns rarely need long completions; cap decode budget vs cfg default.
+_TOOL_TURN_MAX_TOKENS = 512
+
+
+def _is_qwen_hybrid_thinking_model(model: str) -> bool:
+    """Qwen3.x hybrid models enable thinking by default on DashScope / vLLM."""
+    m = (model or "").lower()
+    return "qwen3" in m or m.startswith("qwen-plus")
+
+
+def _materialize_stream(stream: Any) -> Any:
+    """Fold an OpenAI-style SSE stream into a ChatCompletion-like response."""
+    content: list[str] = []
+    tcs: dict[int, dict[str, str]] = {}
+    finish: str | None = None
+    usage = None
+    for chunk in stream:
+        if getattr(chunk, "usage", None) is not None:
+            usage = chunk.usage
+        for choice in getattr(chunk, "choices", None) or []:
+            finish = choice.finish_reason or finish
+            delta = choice.delta
+            if not delta:
+                continue
+            if delta.content:
+                content.append(delta.content)
+            for tc in delta.tool_calls or []:
+                idx = int(getattr(tc, "index", 0) or 0)
+                slot = tcs.setdefault(idx, {"id": "", "name": "", "args": ""})
+                if tc.id:
+                    slot["id"] = tc.id
+                fn = tc.function
+                if fn and fn.name:
+                    slot["name"] = fn.name
+                if fn and fn.arguments:
+                    slot["args"] += fn.arguments
+
+    class _Fn:
+        def __init__(self, name: str, arguments: str):
+            self.name = name
+            self.arguments = arguments
+
+    class _TC:
+        def __init__(self, tc_id: str, name: str, arguments: str):
+            self.id = tc_id
+            self.type = "function"
+            self.function = _Fn(name, arguments)
+
+    class _Msg:
+        def __init__(self):
+            self.content = "".join(content)
+            self.tool_calls = [
+                _TC(v["id"], v["name"], v["args"]) for _, v in sorted(tcs.items())
+            ] or None
+            self.reasoning_content = None
+
+    class _Choice:
+        def __init__(self):
+            self.message = _Msg()
+            self.finish_reason = finish
+
+    class _Resp:
+        def __init__(self):
+            self.choices = [_Choice()]
+            self.usage = usage
+
+    return _Resp()
 
 
 def _dedupe_finish_calls(invocations: list[ToolInvocation]) -> list[ToolInvocation]:
@@ -275,11 +342,16 @@ class LLMClient:
         (`[{"type": "function", "function": {"name":..., "parameters":...}}, ...]`).
         """
         chat_t0 = time.time()
+        max_tokens = self.cfg.max_tokens
+        if tools_schema:
+            max_tokens = min(max_tokens, _TOOL_TURN_MAX_TOKENS)
         kwargs: dict[str, Any] = {
             "model": self.cfg.model,
             "messages": messages,
             "temperature": self.cfg.temperature,
-            "max_tokens": self.cfg.max_tokens,
+            "max_tokens": max_tokens,
+            "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if self.cfg.use_native_tools and tools_schema:
             kwargs["tools"] = tools_schema
@@ -288,12 +360,16 @@ class LLMClient:
         # --- thinking / reasoning controls ---------------------------- #
         # 1) DeepSeek V4: extra_body={"thinking":{"type":"enabled"}}
         # 2) Intern-S1 family (LMDeploy Chat API): extra_body.thinking_mode=<bool>
-        # 3) Optional reasoning_effort for providers that support it.
+        # 3) Qwen3 hybrid (DashScope / vLLM): enable_thinking defaults ON — disable for low-latency tool turns.
+        # 4) Optional reasoning_effort for providers that support it.
         model_lower = self.cfg.model.lower()
         extra_body: dict[str, Any] = {}
 
         if self.cfg.enable_thinking:
             extra_body["thinking"] = {"type": "enabled"}
+        elif _is_qwen_hybrid_thinking_model(model_lower):
+            extra_body["enable_thinking"] = False
+            extra_body["chat_template_kwargs"] = {"enable_thinking": False}
 
         if model_lower.startswith("intern-s1") and self.cfg.thinking_mode is not None:
             extra_body["thinking_mode"] = bool(self.cfg.thinking_mode)
@@ -314,7 +390,11 @@ class LLMClient:
         for attempt in range(attempts):
             try:
                 api_t0 = time.time()
-                resp = self._client.chat.completions.create(**kwargs)
+                raw = self._client.chat.completions.create(**kwargs)
+                if hasattr(raw, "choices"):
+                    resp = raw
+                else:
+                    resp = _materialize_stream(raw)
                 api_call_s += time.time() - api_t0
                 break
             except BadRequestError as e:

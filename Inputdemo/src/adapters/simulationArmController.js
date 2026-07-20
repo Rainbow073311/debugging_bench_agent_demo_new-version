@@ -12,6 +12,7 @@ function resolveSimulationDir() {
   return candidates.find((candidate) => existsSync(path.join(candidate, "simulate_slider.py"))) || candidates[0];
 }
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const simulationDir = resolveSimulationDir();
 const simulationScript = path.join(simulationDir, "simulate_slider.py");
 const simulationEnv = loadSimulationEnv();
@@ -290,6 +291,24 @@ export class SimulationArmController {
       poseCommand(motionPose, config.motionCommand)
     ];
     const responses = await sendDashboardCommands(commands, config);
+    // Wait for arm to actually reach target (poll GetPose)
+    const maxWaitMs = 30000;
+    const pollMs = 500;
+    const startWait = Date.now();
+    let finalPose = null;
+    while (Date.now() - startWait < maxWaitMs) {
+      await sleep(pollMs);
+      const cp = await currentPose(config);
+      if (cp && cp.pose) {
+        finalPose = cp.pose;
+        const err = Math.hypot(
+          finalPose.x - motionPose.x,
+          finalPose.y - motionPose.y,
+          finalPose.z - motionPose.z
+        );
+        if (err < 15) break;  // within 15mm
+      }
+    }
     return {
       stepId: step.id,
       status: "COMPLETED",
@@ -297,6 +316,7 @@ export class SimulationArmController {
       targetLocationId: step.targetLocationId,
       targetPose: step.targetPose,
       executedPose: motionPose,
+      arrivedPose: finalPose,
       reachability,
       tcpCommand: commands[commands.length - 1],
       controller: "simulation",

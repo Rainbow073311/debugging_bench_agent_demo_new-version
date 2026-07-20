@@ -553,6 +553,7 @@ export const webPage = String.raw`<!doctype html>
           <div class="mg400-strip">
             <strong>MG400</strong>
             <span id="mg400MonitorAction" class="status">等待状态...</span>
+            <span id="mg400Position" class="status" style="margin-left:16px;font-family:monospace">位置：读取中...</span>
           </div>
           <div>
             <h3>等待队列</h3>
@@ -769,6 +770,7 @@ export const webPage = String.raw`<!doctype html>
     const queuedRunCountEl = document.querySelector("#queuedRunCount");
     const mg400MonitorStateEl = document.querySelector("#mg400MonitorState");
     const mg400MonitorActionEl = document.querySelector("#mg400MonitorAction");
+    const mg400PositionEl = document.querySelector("#mg400Position");
     const monitorUpdatedEl = document.querySelector("#monitorUpdated");
     let promptMode = "text";
     let finalTranscript = "";
@@ -1728,6 +1730,7 @@ export const webPage = String.raw`<!doctype html>
         try {
           setStatus(interactiveStatus, "执行中...");
           await sendCommand({ name: button.dataset.cmd });
+          refreshRobotPosition();  // 手动读位置后立即刷新显示
           setStatus(interactiveStatus, "完成", "ok");
         } catch (error) {
           setStatus(interactiveStatus, error.message, "error");
@@ -1786,6 +1789,31 @@ export const webPage = String.raw`<!doctype html>
       });
 
     startVlmStatusPolling();
+    startRobotPositionPolling();
+
+    let robotPositionTimer = null;
+
+    function startRobotPositionPolling() {
+      if (robotPositionTimer) clearInterval(robotPositionTimer);
+      robotPositionTimer = setInterval(refreshRobotPosition, 1000);
+      refreshRobotPosition();
+    }
+
+    async function refreshRobotPosition() {
+      try {
+        const data = await jsonFetch("/api/mg400/status");
+        if (data.robot?.pose) {
+          const p = data.robot.pose;
+          mg400PositionEl.textContent =
+            "X=" + p.x.toFixed(1) + "  Y=" + p.y.toFixed(1) +
+            "  Z=" + p.z.toFixed(1) + "  R=" + p.r.toFixed(1);
+          mg400PositionEl.style.color = "";
+        }
+      } catch (_e) {
+        mg400PositionEl.textContent = "位置：离线";
+        mg400PositionEl.style.color = "var(--warn)";
+      }
+    }
 
   </script>
 </body>

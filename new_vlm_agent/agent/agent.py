@@ -20,6 +20,15 @@ Design goals:
 # Efficiency Change Log (training_platform)
 # 2026-06-04 | phase_isolated_context: per-phase fresh messages, JSON plan unchanged,
 #   single VLM API; handoff = artifact paths + key facts + full next_action_hint.
+# 2026-06-30 | initial prompt trim: path-only input images + compact inlined workflow.
+# 2026-07-02 | Step3+ pre-marked: trim system Step2–8 blocks + skip turn-0 full-flow boilerplate.
+# 2026-07-02 | Step3+ pre-marked: replace generic system head (~7.6k chars) with case12-only compact prompt.
+# 2026-07-02 | finish-only phase_context_reset: drop `cur_group != "done"` guard so Step0→finish
+#   trims consumed tool/assistant history; handoff keeps step08 pixel + artifact paths.
+# 2026-07-02 | auto-finish after emit_step08: programmatic finish when Part D artifacts complete;
+#   skips redundant LLM finish step (~2s on Step3+ runs).
+# 2026-07-02 | Step3+ turn-0 dedupe: strip PART3 quickstart repeat, drop Provided inputs list,
+#   slim INPUT_PATHS to anchor keys; zero-arg tool schemas for case12 defaults (~1k fewer tokens).
 
 from __future__ import annotations
 
@@ -104,11 +113,11 @@ class Agent:
         self.registry = registry or build_default_registry(cfg.workspace_dir)
         self.client = LLMClient(cfg)
         self.console = console or Console()
-        self._event_sink = event_sink
         self.system_prompt = system_prompt or SYSTEM_PROMPT_TP_LOCATE
         self._initial_task_compacted = False
         self._run_inputs: dict[str, Any] = {}
         self._part0_mark_tp_calls = 0
+        self._event_sink = event_sink
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -116,13 +125,22 @@ class Agent:
 
     def run(self, question: str,
             inputs: dict[str, Any] | None = None,
-            run_name: str | None = None) -> AgentRun:
+            run_name: str | None = None,
+            event_sink: Any = None) -> AgentRun:
         """Execute the agent loop for a single task.
 
         `inputs` is a free-form dict. Keys whose value is a path ending in
         a common image extension are auto-attached as images in the first
         user turn; everything else is listed as text context.
         """
+        _sink = event_sink or self._event_sink
+        def emit_event(event_type: str, payload: dict[str, Any]) -> None:
+            if _sink is None:
+                return
+            try:
+                _sink(event_type, payload)
+            except Exception:
+                pass
         wf_mode = str(getattr(self.cfg, "workflow_mode", "default") or "default").strip()
         if not wf_mode:
             wf_mode = "default"
@@ -132,6 +150,7 @@ class Agent:
             os.environ.pop("VLM_AGENT_WORKFLOW_MODE", None)
 
         run_dir = self._prepare_run_dir(run_name)
+        emit_event("agent.run_dir", {"run_dir": str(run_dir)})
         q_eff = self._effective_task_question(question)
         self._run_inputs = dict(inputs or {})
         self._part0_mark_tp_calls = 0
@@ -215,7 +234,7 @@ class Agent:
                         if last_plan_group is None:
                             if plan_idx > 0:
                                 need_reset = True
-                        elif cur_group != last_plan_group and cur_group != "done":
+                        elif cur_group != last_plan_group:
                             need_reset = True
                         if need_reset:
                             self._reset_messages_for_new_phase(
@@ -234,6 +253,7 @@ class Agent:
                     else None
                 )
                 step_input_messages = self._snapshot_messages(messages)
+                emit_event("agent.waiting", {"step": step_idx})
                 t0 = time.time()
                 reply = self.client.chat(messages, tools_schema=step_tools_schema or tools_schema)
                 llm_dt = time.time() - t0
@@ -314,9 +334,11 @@ class Agent:
                 tool_timing_payload: list[dict[str, Any]] = []
                 attached_images: list[str] = []
                 final_answer: Any = None
+                emit_step08_ok_this_step = False
                 tools_t0 = time.time()
 
                 for call in reply.tool_calls:
+                    emit_event("tool.started", {"step": step_idx, "name": call.name, "arguments_preview": str(call.arguments)[:200] if call.arguments else None})
                     block_reason = (
                         self._is_call_blocked_by_plan(call, plan_steps, plan_idx)
                         if plan_steps
@@ -377,6 +399,7 @@ class Agent:
                     tool_t0 = time.time()
                     result_obj = self.registry.run(call.name, exec_arguments)
                     tool_dt = time.time() - tool_t0
+                    emit_event("tool.finished", {"step": step_idx, "name": call.name, "ok": result_obj.ok, "duration_s": round(tool_dt, 4)})
                     if call.name == "mark_tp_on_assembly_from_pdf_hit":
                         self._part0_mark_tp_calls += 1
                     finish_contract_errors: list[str] = []
@@ -519,6 +542,8 @@ class Agent:
                     attached_images.extend(result_obj.images)
                     if result_obj.is_final and final_answer is None:
                         final_answer = result_obj.final_data
+                    if result_obj.ok and call.name == "emit_step08_from_case12_aligned":
+                        emit_step08_ok_this_step = True
                     if (
                         result_obj.ok
                         and call.name == "emit_step08_from_case12_aligned"
@@ -553,6 +578,7 @@ class Agent:
                             result_tag="auto-chained",
                         )
                         if emit_result.ok:
+                            emit_step08_ok_this_step = True
                             messages.append(self.client.user_message(
                                 "[auto-chain] PartD: `emit_step08_from_case12_aligned` ran after "
                                 "alignment. Read pixel from `debug/step08_result.json` and call "
@@ -562,6 +588,37 @@ class Agent:
                                 messages.append(self.client.user_message(
                                     self._build_finish_now_planner_message()
                                 ))
+
+                if emit_step08_ok_this_step and final_answer is None:
+                    auto_finish = self._try_auto_finish_after_emit_step08(plan_steps)
+                    if auto_finish is not None:
+                        answer_payload, finish_result = auto_finish
+                        finish_call = ToolInvocation(
+                            id="auto-finish-after-emit-step08",
+                            name="finish",
+                            arguments={"answer": answer_payload},
+                        )
+                        self._render_tool(finish_call, finish_result)
+                        tool_call_payload.append({
+                            "id": finish_call.id,
+                            "name": "finish",
+                            "arguments": {"answer": answer_payload},
+                        })
+                        tool_result_payload.append({
+                            "id": finish_call.id,
+                            "ok": finish_result.ok,
+                            "duration_s": 0.0,
+                            "text": truncate(finish_result.text, 2000),
+                            "images": [],
+                            "is_final": finish_result.is_final,
+                        })
+                        tool_timing_payload.append({
+                            "id": finish_call.id,
+                            "name": "finish",
+                            "ok": finish_result.ok,
+                            "duration_s": 0.0,
+                        })
+                        final_answer = answer_payload
 
                 tools_dt = time.time() - tools_t0
 
@@ -656,19 +713,35 @@ class Agent:
                     current_phase=current_phase,
                     latest_step=latest,
                 )
+                emit_event("agent.step", {
+                    "step": step_idx,
+                    "tool_calls": tool_call_payload,
+                    "tool_results": tool_result_payload,
+                    "final": final_answer is not None,
+                })
 
                 if final_answer is not None:
                     result.final_answer = final_answer
                     result.stopped_reason = "finish-tool-called"
+                    emit_event("agent.final", {
+                        "final_answer": final_answer,
+                        "stopped_reason": result.stopped_reason,
+                        "run_dir": str(run_dir),
+                    })
                     break
             else:
                 result.stopped_reason = "max-steps-reached"
                 if self._force_submit_at_max_steps(result):
                     result.stopped_reason = "max-steps-reached-forced-submit"
+                if result.final_answer:
+                    emit_event("agent.final", {"final_answer": result.final_answer, "stopped_reason": result.stopped_reason, "run_dir": str(run_dir)})
+                else:
+                    emit_event("agent.failed", {"error": result.stopped_reason, "stopped_reason": result.stopped_reason})
         except BaseException as e:
             run_exception = e
             result.stopped_reason = f"exception:{type(e).__name__}"
             result.last_error = str(e)[:8000]
+            emit_event("agent.failed", {"error": result.last_error, "stopped_reason": result.stopped_reason})
         finally:
             result.part_timing = self._compute_part_timing(result)
             self._persist_run(run_dir, result, messages)
@@ -1209,6 +1282,9 @@ class Agent:
                     facts.append(f"tp_id_or_ref={tp.strip()}")
             except Exception:  # noqa: BLE001
                 pass
+        px = self._read_step08_pixel()
+        if px is not None:
+            facts.append(f"pixel={px} (debug/step08_result.json, board frame)")
         if facts:
             return "\n".join(f"- {f}" for f in facts)
         return ""
@@ -1221,7 +1297,19 @@ class Agent:
         plan_idx: int,
     ) -> list[dict[str, Any]]:
         """Fresh worker context for a new plan phase group (same VLM, empty history)."""
-        sys_text = self.system_prompt
+        finish_only = plan_idx >= len(plan_steps)
+        run_inputs = inputs or getattr(self, "_run_inputs", {}) or {}
+        sys_text = (
+            self._system_prompt_for_task(run_inputs)
+            if finish_only or self._is_step3_premarked_case(run_inputs)
+            else self.system_prompt
+        )
+        if finish_only:
+            sys_text += (
+                "\n\n## Finish step (minimal)\n"
+                "- Submit ONLY via `finish`; no prose before the tool call.\n"
+                "- answer.pixel from Key facts; answer.reasoning ≤ 1 short sentence.\n"
+            )
         if not self.cfg.use_native_tools:
             sys_text += "\n\n" + FALLBACK_TOOL_PROTOCOL.replace(
                 "{tool_list}", self.registry.describe_for_prompt()
@@ -1253,20 +1341,28 @@ class Agent:
         if facts:
             lines.extend(["", "Key facts already established:", facts])
 
-        lines.extend(["", "INPUT_PATHS (unchanged):"])
-        skip_keys = {"workflow_plan_file", "workflow_doc", "skills_doc"}
-        for key, value in (inputs or {}).items():
-            if key in skip_keys or not isinstance(value, str):
-                continue
-            lines.append(f"- {key} = {value}")
+        if not finish_only:
+            lines.extend(["", "INPUT_PATHS (unchanged):"])
+            skip_keys = {"workflow_plan_file", "workflow_doc", "skills_doc"}
+            for key, value in (inputs or {}).items():
+                if key in skip_keys or not isinstance(value, str):
+                    continue
+                lines.append(f"- {key} = {value}")
 
-        lines.extend([
-            "",
-            "Rules:",
-            "- Follow ONLY the next [planner-step] message (full next_action_hint preserved).",
-            "- Do NOT redo completed phases; do NOT call list_files to explore.",
-            "- Open artifacts with read_text_file / view_image when the current phase requires it.",
-        ])
+        if finish_only:
+            lines.extend([
+                "",
+                "Rules:",
+                "- Call `finish` ONLY per [planner-step]; do not read/view/align again.",
+            ])
+        else:
+            lines.extend([
+                "",
+                "Rules:",
+                "- Follow ONLY the next [planner-step] message (full next_action_hint preserved).",
+                "- Do NOT redo completed phases; do NOT call list_files to explore.",
+                "- Open artifacts with read_text_file / view_image when the current phase requires it.",
+            ])
         messages.append(self.client.user_message("\n".join(lines)))
         return messages
 
@@ -1353,6 +1449,13 @@ class Agent:
         lines = [
             "[planner-step]",
             f"{prefix} REQUIRED next action: call `finish` ONLY — no other tools.",
+            "",
+            "MINIMAL OUTPUT (mandatory):",
+            "- Emit ONLY the `finish` tool call — zero prose before the tool tag.",
+            "- answer.pixel: copy handoff/step08 below (do not recalculate).",
+            "- answer.reasoning: at most ONE sentence (≤20 words).",
+            "- Do NOT restate tool logs or summarize prior steps.",
+            "",
             "Use answer fields:",
             "- tp_id from debug/case10_signal_to_tp.json (or handoff below)",
             f"- pixel from debug/step08_result.json"
@@ -1364,6 +1467,26 @@ class Agent:
         if tp:
             lines.extend(["", "Handoff:", tp])
         return "\n".join(lines)
+
+    def _try_auto_finish_after_emit_step08(
+        self,
+        plan_steps: list[WorkflowPlanStep],
+    ) -> tuple[dict[str, Any], ToolResult] | None:
+        """Programmatic finish when emit_step08 produced valid Part D deliverables."""
+        if not plan_steps or not self._is_plan_step_done(plan_steps[-1]):
+            return None
+        pixel = self._read_step08_pixel()
+        if pixel is None or not self._artifact_exists("debug/step08_final_tp.png"):
+            return None
+        answer: dict[str, Any] = {"pixel": pixel, "needs_user_help": False}
+        errors = self._validate_skill_contract()
+        errors.extend(self._validate_finish_answer(answer))
+        if errors:
+            return None
+        result_obj = self.registry.run("finish", {"answer": answer})
+        if result_obj.is_final and result_obj.ok:
+            return answer, result_obj
+        return None
 
     def _upsert_planner_step_message(
         self,
@@ -1439,6 +1562,8 @@ class Agent:
             t = self.registry.get(name)
             if t is not None:
                 out.append(t.to_openai_schema())
+        if out and self._is_step3_premarked_case(getattr(self, "_run_inputs", {}) or {}):
+            out = [self._slim_step3_tool_schema(s) for s in out]
         return out or self.registry.openai_schema()
 
     def _is_call_blocked_by_plan(
@@ -2270,8 +2395,48 @@ class Agent:
                 break
         return found
 
+    def _compact_case12_tool_context_summary(self, tool_name: str) -> str | None:
+        """After align/emit, keep only coords + confidence for the next LLM turn."""
+        dbg = self.cfg.workspace_dir / "debug"
+        try:
+            if tool_name == "case12_build_and_align_from_step02_anchors":
+                aligned_p = dbg / "case12_board_points_aligned.json"
+                if aligned_p.is_file():
+                    obj = json.loads(aligned_p.read_text(encoding="utf-8"))
+                    tgt = obj.get("board_roi_target_px_approx")
+                    return (
+                        f"[tool-summary] {tool_name}\n"
+                        f"- board_roi_target_px_approx={tgt}\n"
+                        f"- source={obj.get('source', '')}"
+                    )
+            if tool_name == "emit_step08_from_case12_aligned":
+                step08_p = dbg / "step08_result.json"
+                if step08_p.is_file():
+                    obj = json.loads(step08_p.read_text(encoding="utf-8"))
+                    px = obj.get("pixel")
+                    conf = obj.get("confidence")
+                    out = f"[tool-summary] {tool_name}\n- pixel={px}"
+                    if conf is not None:
+                        out += f"\n- confidence={conf}"
+                    return out
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
     def _compress_tool_result_for_context(self, tool_name: str, raw_text: str) -> str:
         max_chars = max(180, int(getattr(self.cfg, "context_tool_text_max_chars", 700)))
+        if (
+            self._is_step3_premarked_case(self._run_inputs)
+            and tool_name
+            in {
+                "case12_build_and_align_from_step02_anchors",
+                "emit_step08_from_case12_aligned",
+            }
+        ):
+            compact = self._compact_case12_tool_context_summary(tool_name)
+            if compact:
+                return truncate(compact, 120)
+            max_chars = min(max_chars, 280)
         text = (raw_text or "").strip()
         if not text:
             return f"[tool-summary] {tool_name}: (empty output)"
@@ -2555,159 +2720,257 @@ class Agent:
             return text
         return text + "\n\n" + CLI_WORKFLOW_MODE_VLM_TEST_APPEND_ZH
 
+    @staticmethod
+    def _compact_initial_task_text(question: str, inputs: dict[str, Any]) -> str:
+        """Keep full task text so VLM has complete workflow context (especially Part A IC detection)."""
+        return question.strip()
+
+    @staticmethod
+    def _compact_step3_premarked_task_text(question: str, inputs: dict[str, Any]) -> str:
+        """Drop PART3 quickstart duplicated in the Step3+ system prompt."""
+        from agent.config import PART3_QUICKSTART_ZH
+
+        text = Agent._compact_initial_task_text(question, inputs).strip()
+        if PART3_QUICKSTART_ZH in text:
+            text = text.replace(PART3_QUICKSTART_ZH, "").strip()
+        while "\n\n\n" in text:
+            text = text.replace("\n\n\n", "\n\n")
+        return text
+
+    @staticmethod
+    def _step3_premarked_input_paths(inputs: dict[str, Any]) -> dict[str, str]:
+        """Only anchor rasters — case12 tools consume debug/ defaults after bootstrap."""
+        keep = ("front_locator_marked", "front_board_marked")
+        return {
+            k: v for k, v in inputs.items()
+            if k in keep and isinstance(v, str)
+        }
+
+    _STEP3_ZERO_ARG_TOOL_NAMES = frozenset({
+        "case12_build_and_align_from_step02_anchors",
+        "emit_step08_from_case12_aligned",
+    })
+
+    @staticmethod
+    def _slim_step3_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
+        """Shrink OpenAI tool listings when all parameters use tool-side defaults."""
+        fn = schema.get("function", schema)
+        name = str(fn.get("name", ""))
+        if name in Agent._STEP3_ZERO_ARG_TOOL_NAMES:
+            slim_fn = dict(fn)
+            desc = (fn.get("description") or "").strip()
+            if desc:
+                slim_fn["description"] = desc.split(".", 1)[0] + "."
+            slim_fn["parameters"] = {"type": "object", "properties": {}, "required": []}
+            return {"type": "function", "function": slim_fn} if "function" in schema else slim_fn
+        if name == "finish":
+            slim_fn = dict(fn)
+            slim_fn["parameters"] = {
+                "type": "object",
+                "properties": {
+                    "answer": {
+                        "type": "object",
+                        "description": 'Minimal: {"pixel":[x,y],"needs_user_help":false}',
+                    },
+                },
+                "required": ["answer"],
+            }
+            return {"type": "function", "function": slim_fn} if "function" in schema else slim_fn
+        return schema
+
+    _STEP3_PREMARKED_SYSTEM_PROMPT = (
+        "You are the VLM for PCBA test-point localization. Deliver integer pixel "
+        "(x, y) on the board photo for the robotic probe.\n\n"
+        "## Part D — case12 (Step02 anchors preloaded under debug/)\n"
+        "1. `case12_build_and_align_from_step02_anchors` — case12 graph build + IC "
+        "align from step02 anchor PNGs (defaults: debug/case10_* largest-IC box paths).\n"
+        "2. `emit_step08_from_case12_aligned` — write `step08_final_tp.png` + "
+        "`step08_result.json`.\n"
+        "3. `finish` — submit `answer.pixel` from `step08_result.json` (board native frame).\n\n"
+        "Rules: call tools in order; minimal reasoning; no rotate/mirror/warp; "
+        "integer coords, origin top-left; if uncertain use `needs_user_help=true`.\n\n"
+        "## [TOOL_CONSTRAINTS]\n"
+        "### partd_case12_align_and_finish\n"
+        "- Tools: case12_build_and_align_from_step02_anchors, "
+        "emit_step08_from_case12_aligned, finish"
+    )
+
+    def _system_prompt_for_task(self, inputs: dict[str, Any]) -> str:
+        """Minimal case12-only system prompt for Step3+ pre-marked runs (smaller prefill)."""
+        if self._is_step3_premarked_case(inputs):
+            return self._STEP3_PREMARKED_SYSTEM_PROMPT
+        return self.system_prompt
+
     def _initial_messages(self, question: str,
                           inputs: dict[str, Any]) -> list[dict[str, Any]]:
-        sys_text = self.system_prompt
+        step3_premarked = self._is_step3_premarked_case(inputs)
+        sys_text = self._system_prompt_for_task(inputs)
         if not self.cfg.use_native_tools:
             sys_text += "\n\n" + FALLBACK_TOOL_PROTOCOL.replace(
                 "{tool_list}", self.registry.describe_for_prompt()
             )
         messages: list[dict[str, Any]] = [self.client.system_message(sys_text)]
 
-        text_context_lines: list[str] = [
-            "## Task",
-            question.strip(),
-            "",
-            "## Provided inputs",
-        ]
+        if step3_premarked:
+            slim_inputs = self._step3_premarked_input_paths(inputs)
+            text_context_lines: list[str] = [
+                "## Task",
+                self._compact_step3_premarked_task_text(question, inputs),
+                "",
+                self._format_input_paths_block(slim_inputs),
+                "- Step02 anchor PNGs copied to debug/ at startup; case12 tools use debug/ defaults.",
+            ]
+        else:
+            text_context_lines = [
+                "## Task",
+                self._compact_initial_task_text(question, inputs),
+                "",
+                "## Provided inputs",
+            ]
+        listed_input_images = False
         image_parts: list[dict[str, Any]] = []
 
         inline_images_ok = self._supports_inline_images()
-        if not inline_images_ok:
-            text_context_lines.append(
-                "- [note] inline image blocks disabled for current model/provider; "
-                "the agent should use file paths plus tools (`run_python`, "
-                "`crop_image`, `annotate_image`) to inspect images."
-            )
+        if not step3_premarked:
+            if not inline_images_ok:
+                text_context_lines.append(
+                    "- [note] inline image blocks disabled for current model/provider; "
+                    "the agent should use file paths plus tools (`run_python`, "
+                    "`crop_image`, `annotate_image`) to inspect images."
+                )
 
-        for key, value in inputs.items():
-            if isinstance(value, str) and Path(value).suffix.lower() in self._IMG_EXT:
-                path = Path(value)
-                if path.exists():
-                    text_context_lines.append(f"- [image] {key} = {path}")
-                    if inline_images_ok:
-                        image_parts.append(self.client.image_part(
-                            encode_image_data_url(path)
-                        ))
+            for key, value in inputs.items():
+                if isinstance(value, str) and Path(value).suffix.lower() in self._IMG_EXT:
+                    path = Path(value)
+                    if path.exists():
+                        text_context_lines.append(f"- [image] {key} = {path}")
+                        if inline_images_ok:
+                            image_parts.append(self.client.image_part(
+                                encode_image_data_url(path)
+                            ))
+                        listed_input_images = True
+                    else:
+                        text_context_lines.append(
+                            f"- [image-missing] {key} = {path}"
+                        )
+                elif isinstance(value, str) and Path(value).exists():
+                    text_context_lines.append(f"- [file] {key} = {value}")
                 else:
-                    text_context_lines.append(
-                        f"- [image-missing] {key} = {path}"
-                    )
-            elif isinstance(value, str) and Path(value).exists():
-                text_context_lines.append(f"- [file] {key} = {value}")
-            else:
-                text_context_lines.append(f"- {key}: {value}")
+                    text_context_lines.append(f"- {key}: {value}")
 
-        str_inputs = {k: v for k, v in inputs.items() if isinstance(v, str)}
-        if str_inputs:
+            str_inputs = {k: v for k, v in inputs.items() if isinstance(v, str)}
+            if str_inputs:
+                text_context_lines.append("")
+                text_context_lines.append(self._format_input_paths_block(str_inputs))
+
+        if not step3_premarked:
             text_context_lines.append("")
-            text_context_lines.append(self._format_input_paths_block(str_inputs))
-
-        text_context_lines.append("")
-        text_context_lines.append(
-            "## Path discipline (MANDATORY)\n"
-            "- **Input files are already resolved above** in `INPUT_PATHS`. Use those paths in tools.\n"
-            "- **Do NOT** call `list_files` to discover inputs. There is **no** `inputs/` subdirectory.\n"
-            "- In `run_python`, read source files from `INPUT_PATHS[...]` whenever possible.\n"
-            "- `WORKSPACE` and `PROJECT_ROOT` variables are available in `run_python`.\n"
-            "- For tool output paths (crop/annotate/save), use relative paths like "
-            "`progress/step_01.md` or `artifacts/result.png` (DO NOT prefix with `workspace/`)."
-        )
-        text_context_lines.append("")
-        text_context_lines.append(
-            "## Step2 gate (when Task requires red anchor boxes)\n"
-            "If the **Task** text says to **skip Step2** and use only "
-            "`match_green_tp_roi_to_board`, obey the Task (no red-box PNGs).\n"
-            "Otherwise, for red-anchor workflows:\n"
-            "- Anchor: IC with **clear silkscreen** on both images.\n"
-            "- **Do not rotate/mirror/warp** images; native pixel coordinates only.\n"
-            "- **Board:** prefer **`annotate_image`** `{bbox, color:red}` or `run_python` with "
-            "**`INPUT_PATHS['front_board_photo']`** (never paste broken `F:\\...\\` strings — "
-            "in Python `\"...\\test...\"` turns `\\t` into a tab and breaks paths).\n"
-            "- **Locator:** red box on `debug/step01_locator_front_anchor.png`, save "
-            "`debug/step02_locator_front_anchor.png`.\n"
-            "- Do **not** call `run_step3_mapping` until both step02 files exist."
-        )
-        text_context_lines.append("")
-        text_context_lines.append(
-            "## Step3 execution constraints (MANDATORY when task starts from Step3)\n"
-            "- Prefer **`match_green_tp_roi_to_board`** when the Task skips red anchors; "
-            "omit `board_path` so `INPUT_PATHS['front_board_photo']` is used.\n"
-            "- Reuse tool defaults for template matching unless evidence suggests otherwise: "
-            "`search_max_dim=1200`, `min_match_score=0.2`, `scale_steps=26`, `margin_px=80`.\n"
-            "- For STANDARD_WORKFLOW case011 (part0->partB->partA->partD), "
-            "do **not** use `run_step3_mapping`; use `case12_build_and_align_from_step02_anchors` in PartD.\n"
-            "- `run_step3_mapping` is only for non-case12 legacy Step3 flows explicitly requested by Task.\n"
-            "- Use HSV red ranges [0,100,100]-[10,255,255] and [170,100,100]-[180,255,255].\n"
-            "- Use HSV green range [40,100,100]-[80,255,255].\n"
-            "- Detect largest contour and use boundingRect/moments.\n"
-            "- Use scalar mapping formula u,v -> px,py (no cv2.transform).\n"
-            "- Do not clamp u/v by default; values outside [0,1] can be valid.\n"
-            "- Emit debug/step03_mapping.json and debug/step03_prior_on_board.png.\n"
-            "- Optional: prefer tool `match_green_tp_roi_to_board` (green ROI template) "
-            "when red anchors are weak; same JSON schema."
-        )
-        text_context_lines.append("")
-        wf_mode_run = getattr(self.cfg, "workflow_mode", "default")
-        part_d_primary = (
-            "- **Default Part D (`STANDARD_WORKFLOW`)** uses **`case12_step02_opencv_ic_align`** "
-            "（两框 OpenCV）："
-            "`run_build_step02_locator_graph` → `run_align_locator_graph_to_board_ic_bbox` "
-            "(OpenCV **实物 IC 红框**) "
-            "→ call **`emit_step08_from_case12_aligned`** "
-            "(from **`case12_board_points_aligned.json`** to **`step08_final_tp.png`** + "
-            "**`step08_result.json`** + `step03_mapping.json.mapping_method`) "
-            "→ **`finish`**.\n"
-        )
-        if wf_mode_run == "vlm_test":
-            part_d_primary = (
-                "- **This CLI run (`workflow_mode=vlm_test`)** uses **`case12_step02_vlm_ic_align`**: "
-                "see **`vlm_test` appendix inside ## Task above** — `run_build_step02_locator_graph` → "
-                "VLM → **`case12_board_largest_ic_bbox_vlm.json`** → "
-                "**`run_align_locator_graph_to_board_ic_bbox_vlm`** → **`case12_board_points_aligned.json`** "
-                "(**`source`=`vlm_ic_correspondence_isotropic_align`**) → **`step08_*` → `finish`**.\n"
+            text_context_lines.append(
+                "## Path discipline (MANDATORY)\n"
+                "- **Input files are already resolved above** in `INPUT_PATHS`. Use those paths in tools.\n"
+                "- **Do NOT** call `list_files` to discover inputs. There is **no** `inputs/` subdirectory.\n"
+                "- In `run_python`, read source files from `INPUT_PATHS[...]` whenever possible.\n"
+                "- `WORKSPACE` and `PROJECT_ROOT` variables are available in `run_python`.\n"
+                "- For tool output paths (crop/annotate/save), use relative paths like "
+                "`progress/step_01.md` or `artifacts/result.png` (DO NOT prefix with `workspace/`)."
             )
-        text_context_lines.append(
-            "## Step4–8 tool mandate (full-flow tasks)\n"
-            "- Produce the **`debug/*.png` / `debug/*.json`** artifacts your Task requires; "
-            "`progress/step_*.md` notes are **optional** (runtime does not gate `finish` on them).\n"
-            + part_d_primary +
-            "- **Legacy Part D** (`case10_dual_roi_layout`): **Step4** — **`read_text_file`** "
-            "(step03_mapping.json), **`image_info`** (board), "
-            "**`crop_image`** → `debug/step04_roi_crop.png`, **`view_image`** as needed.\n"
-            "- **VLM Path C variant:** Step4 is **`annotate_image`** on "
-            "`debug/step03_locator_roi.png` "
-            "→ `debug/step04_locator_landmarks.png` (red landmark boxes), "
-            "then board prior/mapping; "
-            "board ROI crop stays `debug/step04_roi_crop.png` after mapping.\n"
-            "- **Dual-ROI path Step5–7:** must call **`run_candidate_pipeline`** at least "
-            "once with `roi_bbox`, "
-            "`prior_board`, and board image path (see Task / SKILL).\n"
-            "- **Step8:** must call **`annotate_image`** on the **full** board → "
-            "`debug/step08_final_tp.png`, "
-            "write consistent **`debug/step08_result.json`**, then **`finish`** with **`pixel`** [x,y] "
-            "aligned "
-            "to that board frame.\n"
-            "- Describing a step without the matching tool call is incomplete."
-        )
-        text_context_lines.append("")
-        text_context_lines.append(
-            "Start with **Part 0**: `search_pdf_text` on `INPUT_PATHS['schematic_pdf']` "
-            "(query=`target_signal`), then `assembly_drawing_pdf`, then "
-            "`mark_tp_on_assembly_from_pdf_hit`. "
-            "**Do not** spend steps on `list_files` or `run_python` PDF library probes. "
-            "Use tools for every non-trivial step (especially Step4–8 — each step needs real tool calls). "
-            "Finish by calling the `finish` tool."
-        )
+            text_context_lines.append("")
+            text_context_lines.append(
+                "## Step2 gate (when Task requires red anchor boxes)\n"
+                "If the **Task** text says to **skip Step2** and use only "
+                "`match_green_tp_roi_to_board`, obey the Task (no red-box PNGs).\n"
+                "Otherwise, for red-anchor workflows:\n"
+                "- Anchor: IC with **clear silkscreen** on both images.\n"
+                "- **Do not rotate/mirror/warp** images; native pixel coordinates only.\n"
+                "- **Board:** prefer **`annotate_image`** `{bbox, color:red}` or `run_python` with "
+                "**`INPUT_PATHS['front_board_photo']`** (never paste broken `F:\\...\\` strings — "
+                "in Python `\"...\\test...\"` turns `\\t` into a tab and breaks paths).\n"
+                "- **Locator:** red box on `debug/step01_locator_front_anchor.png`, save "
+                "`debug/step02_locator_front_anchor.png`.\n"
+                "- Do **not** call `run_step3_mapping` until both step02 files exist."
+            )
+            text_context_lines.append("")
+            text_context_lines.append(
+                "## Step3 execution constraints (MANDATORY when task starts from Step3)\n"
+                "- Prefer **`match_green_tp_roi_to_board`** when the Task skips red anchors; "
+                "omit `board_path` so `INPUT_PATHS['front_board_photo']` is used.\n"
+                "- Reuse tool defaults for template matching unless evidence suggests otherwise: "
+                "`search_max_dim=1200`, `min_match_score=0.2`, `scale_steps=26`, `margin_px=80`.\n"
+                "- For STANDARD_WORKFLOW case011 (part0->partB->partA->partD), "
+                "do **not** use `run_step3_mapping`; use `case12_build_and_align_from_step02_anchors` in PartD.\n"
+                "- `run_step3_mapping` is only for non-case12 legacy Step3 flows explicitly requested by Task.\n"
+                "- Use HSV red ranges [0,100,100]-[10,255,255] and [170,100,100]-[180,255,255].\n"
+                "- Use HSV green range [40,100,100]-[80,255,255].\n"
+                "- Detect largest contour and use boundingRect/moments.\n"
+                "- Use scalar mapping formula u,v -> px,py (no cv2.transform).\n"
+                "- Do not clamp u/v by default; values outside [0,1] can be valid.\n"
+                "- Emit debug/step03_mapping.json and debug/step03_prior_on_board.png.\n"
+                "- Optional: prefer tool `match_green_tp_roi_to_board` (green ROI template) "
+                "when red anchors are weak; same JSON schema."
+            )
+            text_context_lines.append("")
+            wf_mode_run = getattr(self.cfg, "workflow_mode", "default")
+            part_d_primary = (
+                "- **Default Part D (`STANDARD_WORKFLOW`)** uses **`case12_step02_opencv_ic_align`** "
+                "（两框 OpenCV）："
+                "`run_build_step02_locator_graph` → `run_align_locator_graph_to_board_ic_bbox` "
+                "(OpenCV **实物 IC 红框**) "
+                "→ call **`emit_step08_from_case12_aligned`** "
+                "(from **`case12_board_points_aligned.json`** to **`step08_final_tp.png`** + "
+                "**`step08_result.json`** + `step03_mapping.json.mapping_method`) "
+                "→ **`finish`**.\n"
+            )
+            if wf_mode_run == "vlm_test":
+                part_d_primary = (
+                    "- **This CLI run (`workflow_mode=vlm_test`)** uses **`case12_step02_vlm_ic_align`**: "
+                    "see **`vlm_test` appendix inside ## Task above** — `run_build_step02_locator_graph` → "
+                    "VLM → **`case12_board_largest_ic_bbox_vlm.json`** → "
+                    "**`run_align_locator_graph_to_board_ic_bbox_vlm`** → **`case12_board_points_aligned.json`** "
+                    "(**`source`=`vlm_ic_correspondence_isotropic_align`**) → **`step08_*` → `finish`**.\n"
+                )
+            text_context_lines.append(
+                "## Step4–8 tool mandate (full-flow tasks)\n"
+                "- Produce the **`debug/*.png` / `debug/*.json`** artifacts your Task requires; "
+                "`progress/step_*.md` notes are **optional** (runtime does not gate `finish` on them).\n"
+                + part_d_primary +
+                "- **Legacy Part D** (`case10_dual_roi_layout`): **Step4** — **`read_text_file`** "
+                "(step03_mapping.json), **`image_info`** (board), "
+                "**`crop_image`** → `debug/step04_roi_crop.png`, **`view_image`** as needed.\n"
+                "- **VLM Path C variant:** Step4 is **`annotate_image`** on "
+                "`debug/step03_locator_roi.png` "
+                "→ `debug/step04_locator_landmarks.png` (red landmark boxes), "
+                "then board prior/mapping; "
+                "board ROI crop stays `debug/step04_roi_crop.png` after mapping.\n"
+                "- **Dual-ROI path Step5–7:** must call **`run_candidate_pipeline`** at least "
+                "once with `roi_bbox`, "
+                "`prior_board`, and board image path (see Task / SKILL).\n"
+                "- **Step8:** must call **`annotate_image`** on the **full** board → "
+                "`debug/step08_final_tp.png`, "
+                "write consistent **`debug/step08_result.json`**, then **`finish`** with **`pixel`** [x,y] "
+                "aligned "
+                "to that board frame.\n"
+                "- Describing a step without the matching tool call is incomplete."
+            )
+            text_context_lines.append("")
+            text_context_lines.append(
+                "Start with **Part 0**: `search_pdf_text` on `INPUT_PATHS['schematic_pdf']` "
+                "(query=`target_signal`), then `assembly_drawing_pdf`, then "
+                "`mark_tp_on_assembly_from_pdf_hit`. "
+                "**Do not** spend steps on `list_files` or `run_python` PDF library probes. "
+                "Use tools for every non-trivial step (especially Step4–8 — each step needs real tool calls). "
+                "Finish by calling the `finish` tool."
+            )
 
-        user_parts: list[dict[str, Any]] = [
-            self.client.text_part("\n".join(text_context_lines))
-        ]
-        user_parts.extend(image_parts)
-        messages.append(self.client.user_message(user_parts))
-        messages.append(self.client.user_message(
-            self._build_global_summary_message(question, inputs)
-        ))
+        text_parts = [self.client.text_part("\n".join(text_context_lines))]
+        messages.append(self.client.user_message(text_parts + image_parts))
+        if step3_premarked:
+            messages.append(self.client.user_message(
+                "[global-summary] Finish with pixel from debug/step08_result.json (board frame)."
+            ))
+        else:
+            messages.append(self.client.user_message(
+                self._build_global_summary_message(question, inputs)
+            ))
         return messages
 
     @staticmethod

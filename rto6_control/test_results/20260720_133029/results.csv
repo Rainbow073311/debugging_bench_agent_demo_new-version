@@ -1,0 +1,4 @@
+step,item,value,unit,spec,result
+1,U150 VCC_ripple,50.20,mV,25,FAIL
+2,U150 VIO_ripple,4838.24,mV,50,FAIL
+3,U150 VBAT_ripple,4839.45,mV,1500,FAIL

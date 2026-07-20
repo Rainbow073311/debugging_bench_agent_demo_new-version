@@ -580,15 +580,14 @@ function poseFromPixel(value, pointId = null) {
     const known = HARDCODED_POSES[String(pointId).toUpperCase()];
     if (known) return { ...known };
   }
-  if (!Array.isArray(value) || value.length !== 2) return null;
-  const x = Number(value[0]);
-  const y = Number(value[1]);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  return { x: Math.round(x), y: Math.round(y), z: 0, r: 0 };
+  // No hardcoded pose and no calibration — return null to fail safely
+  // (pixel coordinates 0-4000px cannot be used as MG400 mm workspace 0-500mm)
+  return null;
 }
 
 const HARDCODED_POSES = {
   "TP1": { x: 320, y: 50, z: 60, r: 0 },
+  "TP5": { x: 320, y: 30, z: 90, r: 0 },
   "TP6": { x: 280, y: -120, z: 70, r: 0 },
 };
 

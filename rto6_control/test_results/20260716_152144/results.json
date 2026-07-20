@@ -1,0 +1,45 @@
+{
+  "results": [
+    {
+      "step": 1,
+      "item": "U150 VCC_ripple",
+      "value": "3.95",
+      "unit": "mV",
+      "spec": "25",
+      "result": "PASS"
+    },
+    {
+      "step": 2,
+      "item": "U150 VIO_ripple",
+      "value": "3.95",
+      "unit": "mV",
+      "spec": "50",
+      "result": "PASS"
+    },
+    {
+      "step": 3,
+      "item": "U150 VBAT_ripple",
+      "value": "4.46",
+      "unit": "mV",
+      "spec": "1500",
+      "result": "PASS"
+    }
+  ],
+  "screenshots": [
+    {
+      "step": 1,
+      "name": "U150_VCC_ripple",
+      "path": "01_U150_VCC_ripple.png"
+    },
+    {
+      "step": 2,
+      "name": "U150_VIO_ripple",
+      "path": "02_U150_VIO_ripple.png"
+    },
+    {
+      "step": 3,
+      "name": "U150_VBAT_ripple",
+      "path": "03_U150_VBAT_ripple.png"
+    }
+  ]
+}
