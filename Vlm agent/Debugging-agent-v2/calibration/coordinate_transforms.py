@@ -1,183 +1,155 @@
-"""
-像素 → 机器人基座标系 坐标转换模块
+"""Pixel/robot transforms for the project's XYZ-only eye-in-hand camera.
 
-转换链:
-  像素(u,v) → 去畸变 → 相机归一化坐标 → 相机3D射线
-  → 变换到机器人基座标系 → 与工作台平面求交 → 世界坐标(X,Y,Z)
+The live camera pose is recomputed for every image:
 
-用法:
-  from coordinate_transforms import PixelToWorld
-  converter = PixelToWorld("camera_config.yaml")
-  world_xyz = converter.pixel_to_table(u=800, v=600)
+    T_base_to_camera = T_base_to_end(X, Y, Z) @ T_end_to_camera
+
+Robot R is intentionally ignored.  Z comes from the robot pose associated with
+the captured frame; this module does not command motion or replace the existing
+probe descent/threshold logic.
 """
-import numpy as np
-import cv2
-import yaml
+
+from __future__ import annotations
+
 import os
+from typing import Any, Mapping, Sequence
+
+import cv2
+import numpy as np
+import yaml
+
+try:
+    from .eye_in_hand_xyz import compose_base_to_camera, make_transform, robot_xyz
+except ImportError:  # Direct execution: python calibration/coordinate_transforms.py
+    from eye_in_hand_xyz import compose_base_to_camera, make_transform, robot_xyz
 
 
 class PixelToWorld:
-    """像素坐标到机器人世界坐标的转换器"""
+    """Convert pixels using a per-frame MG400 XYZ pose."""
 
-    def __init__(self, config_path=None, table_z=None):
-        """
-        config_path: camera_config.yaml 路径
-        table_z: 工作台面在机器人基座标系中的 Z 高度 (mm)
-        """
+    def __init__(self, config_path=None, table_z=None, robot_pose=None):
         if config_path is None:
             config_path = os.path.join(os.path.dirname(__file__), "camera_config.yaml")
 
-        with open(config_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        with open(config_path, "r", encoding="utf-8") as file:
+            data = yaml.safe_load(file)
 
-        # 内参
-        self.K = np.array(data["intrinsics"]["camera_matrix"], dtype=np.float64)
-        self.D = np.array(data["intrinsics"]["dist_coeffs"], dtype=np.float64)
-        self.img_w = data["calibration"]["resolution"][0]
-        self.img_h = data["calibration"]["resolution"][1]
+        self.K = np.asarray(data["intrinsics"]["camera_matrix"], dtype=np.float64)
+        self.D = np.asarray(data["intrinsics"]["dist_coeffs"], dtype=np.float64)
+        self.img_w, self.img_h = data["calibration"]["resolution"]
 
-        # 外参 — 相机在机器人基座标系中的位姿
-        ext = data.get("extrinsics", {}).get("T_base_to_cam", {})
-        self.R = np.array(ext.get("R", np.eye(3)), dtype=np.float64)
-        self.t = np.array(ext.get("t", [[0], [0], [0]]), dtype=np.float64).reshape(3, 1)
+        extrinsics = data.get("extrinsics", {})
+        if "T_base_to_cam" in extrinsics:
+            raise ValueError(
+                "legacy fixed T_base_to_cam is invalid for the eye-in-hand camera; "
+                "run the XYZ eye-in-hand calibration first"
+            )
+        if extrinsics.get("mount_mode") != "eye_in_hand_xyz":
+            raise ValueError("extrinsics.mount_mode must be eye_in_hand_xyz")
+        if extrinsics.get("status") != "calibrated":
+            raise ValueError("eye-in-hand extrinsics are not calibrated")
+        if extrinsics.get("robot_axes_used") != ["x", "y", "z"]:
+            raise ValueError("eye-in-hand extrinsics must use robot axes x, y and z")
+        if "r" not in extrinsics.get("robot_axes_ignored", []):
+            raise ValueError("eye-in-hand extrinsics must explicitly ignore robot R")
 
-        # 构建 4×4 变换矩阵 T_base_to_cam
-        self.T_base_to_cam = np.eye(4)
-        self.T_base_to_cam[:3, :3] = self.R
-        self.T_base_to_cam[:3, 3] = self.t.flatten()
+        end_camera = extrinsics.get("T_end_to_camera", {})
+        self.T_end_to_camera = make_transform(
+            np.asarray(end_camera["R"], dtype=np.float64),
+            end_camera["t_mm"],
+        )
 
-        # T_cam_to_base = T_base_to_cam 的逆
-        self.T_cam_to_base = np.linalg.inv(self.T_base_to_cam)
+        table_config = data.get("table_homography", {})
+        self.table_z = (
+            float(table_z)
+            if table_z is not None
+            else (
+                float(table_config["table_z_mm"])
+                if "table_z_mm" in table_config
+                else None
+            )
+        )
+        self._robot_pose = None
+        if robot_pose is not None:
+            self.set_robot_pose(robot_pose)
 
-        # 工作台平面 Z (mm)，在机器人基座标系中
-        self.table_z = table_z
-
-        print(f"  内参: fx={self.K[0,0]:.1f} cx={self.K[0,2]:.1f} cy={self.K[1,2]:.1f}")
-        print(f"  畸变: k1={self.D[0,0]:.4f} k2={self.D[0,1]:.4f}")
-        print(f"  相机位置 (基座标系): x={self.t[0,0]:.0f} y={self.t[1,0]:.0f} z={self.t[2,0]:.0f}")
-        print(f"  桌面 Z: {self.table_z}" if self.table_z else "  桌面 Z: 未设置")
-
-    def pixel_to_camera_ray(self, u, v):
-        """
-        像素坐标 → 相机坐标系下的归一化方向向量
-        返回: (dir_3d, cam_origin)
-          dir_3d: 归一化方向向量 (3×1), 相机坐标系
-          cam_origin: [0, 0, 0] (相机光心)
-        """
-        pts = np.array([[u, v]], dtype=np.float32)
-        # 去畸变
-        undistorted = cv2.undistortPoints(pts, self.K, self.D, P=self.K)
-        x_norm = undistorted[0, 0, 0]  # (u - cx) / fx
-        y_norm = undistorted[0, 0, 1]  # (v - cy) / fy
-
-        # 相机坐标系下的方向 (Z=1 平面上的点)
-        dir_vec = np.array([[x_norm], [y_norm], [1.0]], dtype=np.float64)
-        dir_vec = dir_vec / np.linalg.norm(dir_vec)
-        return dir_vec
-
-    def pixel_to_world_ray(self, u, v):
-        """
-        像素坐标 → 机器人基座标系下的射线
-        返回: (origin, direction)
-          origin: 射线起点 (相机光心在基座标系中)
-          direction: 射线方向 (基座标系中，归一化)
-        """
-        dir_cam = self.pixel_to_camera_ray(u, v)
-
-        # 方向变换: d_world = R_cam_to_base * d_cam
-        R_cam_to_base = self.T_cam_to_base[:3, :3]
-        dir_world = R_cam_to_base @ dir_cam
-        dir_world = dir_world / np.linalg.norm(dir_world)
-
-        # 起点: 相机光心在基座标系中
-        origin_world = self.t.reshape(3)
-
-        return origin_world, dir_world.reshape(3)
-
-    def pixel_to_table(self, u, v):
-        """
-        像素坐标 → 工作台平面上的 3D 世界坐标
-        Z = table_z (常数), 求解射线与水平面的交点
-        返回: (x, y, z) 或 None (如果射线向上/平行于桌面)
-        """
-        if self.table_z is None:
-            raise ValueError("table_z 未设置! 请先标定工作台高度: converter.set_table_z(z)")
-
-        origin, direction = self.pixel_to_world_ray(u, v)
-
-        oz = origin[2]
-        dz = direction[2]
-
-        # 检查是否与桌面平行或方向朝上（远离桌面）
-        if abs(dz) < 1e-6:
-            return None  # 视线平行于桌面
-
-        t = (self.table_z - oz) / dz
-        if t <= 0:
-            return None  # 交点在相机后方
-
-        x = origin[0] + direction[0] * t
-        y = origin[1] + direction[1] * t
-        return (float(x), float(y), float(self.table_z))
+    def set_robot_pose(self, pose: Mapping[str, Any] | Sequence[float]):
+        """Bind the XYZ pose captured with the current image; R is ignored."""
+        xyz = robot_xyz(pose)
+        self._robot_pose = {"x": xyz[0], "y": xyz[1], "z": xyz[2]}
+        return self
 
     def set_table_z(self, z):
-        """设置工作台面在机器人基座标系中的 Z 高度"""
-        self.table_z = z
-        print(f"  桌面 Z 已设置为: {z:.1f} mm")
+        self.table_z = float(z)
+        return self
 
-    def world_to_pixel(self, x, y, z):
-        """
-        世界坐标 → 像素坐标 (反向投影，用于验证)
-        返回: (u, v) 或 None (如果在视野外)
-        """
-        pt_world = np.array([[x, y, z]], dtype=np.float64).T
-        R_base_to_cam = self.R
-        t_base_to_cam = self.t
+    def _resolve_robot_pose(self, robot_pose):
+        if robot_pose is not None:
+            xyz = robot_xyz(robot_pose)
+            return {"x": xyz[0], "y": xyz[1], "z": xyz[2]}
+        if self._robot_pose is None:
+            raise ValueError(
+                "robot XYZ pose is required for every eye-in-hand image"
+            )
+        return self._robot_pose
 
-        # 变换到相机坐标系
-        pt_cam = R_base_to_cam.T @ (pt_world - t_base_to_cam)
-        if pt_cam[2, 0] <= 0:
-            return None  # 在相机后方
+    def base_to_camera(self, robot_pose=None):
+        """Return the live ``T_base_to_camera``; robot R never participates."""
+        return compose_base_to_camera(
+            self._resolve_robot_pose(robot_pose), self.T_end_to_camera
+        )
 
-        # 透视投影
-        xc, yc, zc = pt_cam[0, 0], pt_cam[1, 0], pt_cam[2, 0]
-        u = (xc / zc) * self.K[0, 0] + self.K[0, 2]
-        v = (yc / zc) * self.K[1, 1] + self.K[1, 2]
+    def pixel_to_camera_ray(self, u, v):
+        points = np.array([[[float(u), float(v)]]], dtype=np.float64)
+        # P=None returns normalized camera coordinates.
+        normalized = cv2.undistortPoints(points, self.K, self.D)
+        x_norm, y_norm = normalized[0, 0]
+        direction = np.array([x_norm, y_norm, 1.0], dtype=np.float64)
+        return direction / np.linalg.norm(direction)
 
-        # 检查是否在图像范围内
-        if u < 0 or u >= self.img_w or v < 0 or v >= self.img_h:
+    def pixel_to_world_ray(self, u, v, robot_pose=None):
+        transform = self.base_to_camera(robot_pose)
+        direction = transform[:3, :3] @ self.pixel_to_camera_ray(u, v)
+        direction /= np.linalg.norm(direction)
+        origin = transform[:3, 3].copy()
+        return origin, direction
+
+    def pixel_to_table(self, u, v, robot_pose=None):
+        if self.table_z is None:
+            raise ValueError("table_z is required for ray/plane intersection")
+
+        origin, direction = self.pixel_to_world_ray(u, v, robot_pose)
+        if abs(direction[2]) < 1e-9:
+            return None
+        distance = (self.table_z - origin[2]) / direction[2]
+        if distance <= 0:
+            return None
+        point = origin + direction * distance
+        return float(point[0]), float(point[1]), float(self.table_z)
+
+    def world_to_pixel(self, x, y, z, robot_pose=None):
+        transform = self.base_to_camera(robot_pose)
+        camera_from_base = np.linalg.inv(transform)
+        point_base = np.array([float(x), float(y), float(z), 1.0])
+        point_camera = camera_from_base @ point_base
+        if point_camera[2] <= 0:
             return None
 
-        return (float(u), float(v))
+        projected, _ = cv2.projectPoints(
+            point_camera[:3].reshape(1, 1, 3),
+            np.zeros(3),
+            np.zeros(3),
+            self.K,
+            self.D,
+        )
+        u, v = projected[0, 0]
+        if not (0 <= u < self.img_w and 0 <= v < self.img_h):
+            return None
+        return float(u), float(v)
 
 
-# ---- 测试 ----
 if __name__ == "__main__":
-    converter = PixelToWorld()
-
-    # 设置桌面高度 (根据实际标定结果)
-    TABLE_Z = -228.0  # 从机械臂触碰桌面读取的 Z 坐标
-    converter.set_table_z(TABLE_Z)
-
-    print()
-    print("=" * 60)
-    print("  像素→世界坐标 转换测试")
-    print("=" * 60)
-    print()
-
-    # 测试几个像素点
-    test_pixels = [
-        (640, 360, "左上区域"),
-        (1280, 720, "画面中心"),
-        (1920, 1080, "右下区域"),
-        (200, 1200, "桌面近处中间"),
-        (2400, 1200, "桌面近处右侧"),
-    ]
-
-    for u, v, desc in test_pixels:
-        result = converter.pixel_to_table(u, v)
-        if result:
-            x, y, z = result
-            print(f"  像素 ({u:4d}, {v:4d}) {desc:12s} → 世界 (x={x:7.1f}, y={y:7.1f}, z={z:6.1f}) mm")
-        else:
-            print(f"  像素 ({u:4d}, {v:4d}) {desc:12s} → 无法投影 (超出桌面)")
+    print(
+        "This module is computation-only. Instantiate PixelToWorld with a "
+        "calibrated config and pass the robot XYZ pose captured with each image."
+    )

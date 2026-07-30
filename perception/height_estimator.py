@@ -28,18 +28,35 @@ class HeightEstimator:
             data = yaml.safe_load(f)
         self.H = np.array(data["table_homography"]["H"])
         self.table_z = data["table_homography"]["table_z_mm"]
-        ext = data.get("extrinsics", {}).get("T_base_to_cam", {})
-        self.cam_t = np.array(ext.get("t", [0, 0, 0]), dtype=np.float64)
+        extrinsics = data.get("extrinsics", {})
+        end_camera = extrinsics.get("T_end_to_camera", {})
+        self.camera_offset = np.array(
+            end_camera.get("t_mm", [0, 0, 0]), dtype=np.float64
+        )
+        self.cam_t = None
         self.cam_height = 670.0  # 实测镜头距桌面 mm
 
         K = np.array(data["intrinsics"]["camera_matrix"])
         self.fx, self.fy = K[0,0], K[1,1]
         self.cx_px, self.cy_px = K[0,2], K[1,2]
 
-    def estimate(self, obstacle, blob_pixels):
+    def set_robot_pose(self, pose):
+        """Bind the camera position to frame XYZ; robot R is ignored."""
+        xyz = np.array([pose["x"], pose["y"], pose["z"]], dtype=np.float64)
+        if not np.all(np.isfinite(xyz)):
+            raise ValueError("robot XYZ pose must be finite")
+        self.cam_t = xyz + self.camera_offset
+
+    def estimate(self, obstacle, blob_pixels, robot_pose=None):
         """估算障碍物高度 (mm) — 经验法: 像素面积 × 距离补偿"""
         if not blob_pixels or len(blob_pixels) < 10:
             return 60.0
+        if robot_pose is not None:
+            self.set_robot_pose(robot_pose)
+        if self.cam_t is None:
+            raise ValueError(
+                "robot XYZ pose is required for eye-in-hand height estimation"
+            )
 
         bx, by = obstacle["x"], obstacle["y"]
         area = obstacle.get("pixel_area", len(blob_pixels))

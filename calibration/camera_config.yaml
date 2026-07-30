@@ -60,3 +60,14 @@ quality:
   - 0.04515664729677885
   - 0.03290019385954884
   - 0.040055724825879095
+extrinsics:
+  mount_mode: eye_in_hand_xyz
+  status: uncalibrated
+  robot_axes_used:
+  - x
+  - y
+  - z
+  robot_axes_ignored:
+  - r
+  camera_orientation_source: fixed_calibration
+  note: Run calibrate_extrinsics.py with a known-marker dataset before projection.

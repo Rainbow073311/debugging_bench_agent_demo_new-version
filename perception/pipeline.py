@@ -202,14 +202,11 @@ class PerceptionPlanningPipeline:
         if "table_homography" in cal and "table_z_mm" in cal["table_homography"]:
             self.config.reconstruction.table_z_mm = cal["table_homography"]["table_z_mm"]
 
-        # Camera extrinsics (for height estimation)
+        # XYZ-only eye-in-hand camera offset (never a fixed base/camera pose)
         if "extrinsics" in cal:
             ext = cal["extrinsics"]
-            if "T_base_to_cam" in ext and "t" in ext["T_base_to_cam"]:
-                t = ext["T_base_to_cam"]["t"]
-                # Store for HeightEstimator
-                if not hasattr(self, "_cam_extrinsics_t"):
-                    self._cam_extrinsics_t = t
+            if "T_end_to_camera" in ext and "t_mm" in ext["T_end_to_camera"]:
+                self._camera_offset_in_end_mm = ext["T_end_to_camera"]["t_mm"]
 
         # Arm exclusion zones
         if "arm_exclusion" in cal and "zones" in cal["arm_exclusion"]:

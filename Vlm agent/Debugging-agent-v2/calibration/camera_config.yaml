@@ -60,7 +60,7 @@ quality:
   - 0.04515664729677885
   - 0.03290019385954884
   - 0.040055724825879095
-extrinsics:
+legacy_extrinsics_do_not_use:
   date: '2026-06-18 13:56:08'
   method: cv2.CALIB_HAND_EYE_TSAI
   num_poses: 11
@@ -84,6 +84,17 @@ extrinsics:
     - 381.149394572236
     - 0.0
   note: 'R corrected: flipped Z (180deg around camera X) to point downward'
+extrinsics:
+  mount_mode: eye_in_hand_xyz
+  status: uncalibrated
+  robot_axes_used:
+  - x
+  - y
+  - z
+  robot_axes_ignored:
+  - r
+  camera_orientation_source: fixed_calibration
+  note: Run calibrate_extrinsics.py with a known-marker dataset before projection.
 table_homography:
   date: '2026-06-18 14:21:09'
   method: cv2.findHomography + RANSAC
