@@ -1,0 +1,11 @@
+{
+  "host": "192.168.2.3",
+  "transport": "vxi11",
+  "measurementSlot": 1,
+  "captureMode": "set_mean_then_capture",
+  "desiredMeasurement": "MEAN",
+  "probeMeasurementSource": "CHANNEL2",
+  "meanInterval": "DISPLAY",
+  "timeoutMs": 10000,
+  "outputDir": "outputs/dsox1204g_measurements"
+}

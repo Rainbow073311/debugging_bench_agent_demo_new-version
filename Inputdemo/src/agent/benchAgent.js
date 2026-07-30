@@ -6,6 +6,10 @@ import {
   postReadyTargetExecutionEnabled,
   vlmCompletionReadyMoveSucceeded
 } from "./vlmCompletionReadyMove.js";
+import {
+  executeProbeSignalSearch,
+  retractProbeToStart
+} from "./probeSignalSearch.js";
 
 export class BenchAgent {
   constructor({ vlmClient, largeModelClient, ragRepository, armController, equipmentController, reportGenerator, vlmAgentCaseAdapter = null }) {
@@ -61,6 +65,21 @@ export class BenchAgent {
     }
 
     if (!postReadyTargetExecutionEnabled()) {
+      // ── Z-axis probe descent + oscilloscope signal search ──
+      const probeResult = await executeProbeSignalSearch({
+        armController: this.armController,
+        equipmentController: this.equipmentController,
+        onEvent: (_event) => {}
+      });
+      run.execution.probeSearch = probeResult;
+
+      // ── Retract probe back to safe start pose ──
+      const retractResult = await retractProbeToStart({
+        armController: this.armController
+      });
+      run.execution.probeRetract = retractResult;
+
+      // ── Generate Excel with probe descent data ──
       const targetPoints = (vlmObservation.recommendedMeasurements || [])
         .map((item) => item.locationId)
         .filter(Boolean);
@@ -68,13 +87,14 @@ export class BenchAgent {
         runId: run.runId,
         caseId: run.input.caseId,
         targetPoints,
-        robotPose: readyMove.result.executedPose || readyMove.step.targetPose
+        robotPose: readyMove.result.executedPose || readyMove.step.targetPose,
+        probeSearchResult: probeResult
       });
       run.execution.equipment.push(measurement);
       transition(
         run,
         AgentState.REPORTING,
-        "VLM completed; MG400 is holding at the fixed measurement position, and the current RTO6 display was saved to Excel."
+        `VLM completed; MG400 probe descent finished (${probeResult.status}), ${probeResult.samples.length} voltage samples collected; ${measurement.instrument} display saved to Excel.`
       );
       run.report = this.reportGenerator.create({
         run,

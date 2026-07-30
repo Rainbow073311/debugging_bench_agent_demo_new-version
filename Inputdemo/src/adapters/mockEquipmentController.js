@@ -21,6 +21,10 @@ export class MockEquipmentController {
     };
   }
 
+  async readMeanVoltage() {
+    return { value: 3.3, unit: "V", source: "CHANNEL2", durationMs: 1 };
+  }
+
   async measure(step) {
     return {
       stepId: step.id,

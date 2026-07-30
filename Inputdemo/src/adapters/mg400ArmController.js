@@ -86,6 +86,10 @@ export class Mg400ArmController {
     this.simulationController = new SimulationArmController(config || {});
   }
 
+  async runCommand(action, payload = {}) {
+    return Mg400ArmController.runCommand(action, { ...payload, config: this.config || payload.config });
+  }
+
   async execute(step) {
     const config = this.config || await readMg400Config();
 
@@ -114,7 +118,8 @@ export class Mg400ArmController {
     const startedAt = Date.now();
     const result = await runBridge("execute", {
       config,
-      pose: reachability.pose
+      pose: reachability.pose,
+      trajectory: step.trajectory || null
     });
 
     return {
@@ -129,6 +134,7 @@ export class Mg400ArmController {
       controller: "mg400",
       robot: result.robot,
       responses: result.responses,
+      trajectory: result.trajectory || null,
       durationMs: Date.now() - startedAt
     };
   }
@@ -138,15 +144,21 @@ export class Mg400ArmController {
       return SimulationArmController.runCommand(action, payload);
     }
     let commandReachability = null;
-    if (action === "command" && payload.command?.name === "move") {
+    if (
+      action === "command"
+      && ["move", "probeStep"].includes(payload.command?.name)
+    ) {
       const pose = payload.command.pose || {};
       const completePose = ["x", "y", "z", "r"].every((key) => pose[key] !== undefined && pose[key] !== null && pose[key] !== "");
       if (completePose) {
-        const reachability = evaluateMg400PoseReachability(pose);
+        const isProbeStep = payload.command.name === "probeStep";
+        const reachability = evaluateMg400PoseReachability(pose, isProbeStep
+          ? { allowAdjustment: false, enforceLowZStallGuard: false }
+          : undefined);
         if (!reachability.reachable) {
           return Promise.resolve({
             ok: false,
-            action: "move",
+            action: payload.command.name,
             error: reachability.message,
             reachability,
             fallbackPose: reachability.fallbackPose || null,

@@ -1,17 +1,17 @@
 question: |
-  按仓库默认「标准测点定位流程」全量执行：根据 `user_measurement_question` 与原理图确定目标 TP，在位号图 PDF 检索、整页栅格、OpenCV 绿圈与后续 Part B-D（双 ROI / `case10_dual_roi_layout`）直至 `finish`，并产出规程所列全部 `debug/case10_*`、`step*`、`progress/*` 中间文件。
-  
-  **【本用例 Part B 强制：网格法】** 在写出 **`debug/case10_assembly_drawing_tp_marked.png`** 之后、**首次**为最大 IC 估 **`vlm_roi`** 之前：**必须** 用 **`run_python`** 复制该图并叠 **浅色稀疏网格**（推荐 **`grid_step_px=128`**，半透明浅灰线，勿盖住 TP 绿圈），**`cv2.imwrite` -> `debug/case10_assembly_drawing_tp_marked_grid.png`**（**W×H 与 `tp_marked` 完全一致**）。**估框用的 `view_image` 必须以带网格版为准**；写入 **`case10_assembly_vlm_hints.json`** 时附带 **`grid_step_px`** 与 **`vlm_visual_aid`**: `debug/case10_assembly_drawing_tp_marked_grid.png`。**StepB2 分割与 OpenCV 只准读无网格的 `case10_assembly_drawing_tp_marked.png`**，禁止用 `_grid` 图做阈值。
+  执行统一的板框/孔位测点定位流程：根据 `user_measurement_question` 与原理图确定目标 TP，并严格按 `target_board_side` 选择位号图页面和实物照片。`front` 只使用 Top/Front 位号图与 `front_board_photo`；`back` 只使用 Bottom/Back 位号图与 `back_board_photo`；`auto` 先判断板面再锁定对应照片。随后统一使用 PCB 板框和安装孔/工艺孔配准，将目标映射到所选实物照片并生成 Step08。最大 IC 与 IC-anchor 代码只保留兼容性，本流程禁止调用。
 inputs:
   user_measurement_question: |
-    测试输入电压是否正常
-  schematic_image: "voyah_hvac_v01_20240729_01.png"
-  schematic_pdf: "voyah_hvac_v01_20240729.pdf"
-  assembly_drawing_pdf: "位号图7.29.pdf"
-  assembly_drawing: "位号图7.29_01(12).png"
-  front_board_photo: "PCBA_IMG.jpg"
+    测试6432芯片的3.3V IOsupport电压
+  schematic_pdf: "PROC117B(002_AWR)_Sch.PDF"
+  assembly_drawing_pdf: "PROC117B(002_AWR)_Assy.PDF"
+  front_board_photo: "2.jpg"
+  back_board_photo: "1.jpg"
+  target_board_side: "auto"
   board_id: "case-222"
   engineer_note: |
     Operator: demo-user
-    Part B: grid=tp_marked->grid.png->vlm_roi; OpenCV ungridded tp_marked. See STANDARD_WORKFLOW Part B.
+    Target board side: auto
+    Mapping: use PCB outline plus mounting/tooling-hole registration on the photo selected by target_board_side.
+    IC detection/IC-anchor code is retained for compatibility but must not be called.
     Gen by Inputdemo. PDF->asm_pdf, IMG->asm_fb.

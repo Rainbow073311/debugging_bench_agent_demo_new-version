@@ -75,4 +75,25 @@ npm start
 npm test
 ```
 
+## Oscilloscope selection
+
+RTO6 remains the default. Its existing configuration and bridge are preserved:
+
+```env
+OSCILLOSCOPE_DRIVER=rto6
+```
+
+To select the parallel Keysight DSOX1204G adapter:
+
+```powershell
+python -m pip install -r requirements-instruments.txt
+$env:OSCILLOSCOPE_DRIVER="dsox1204g"
+npm start
+```
+
+The DSOX1204G adapter reads `config/dsox1204g.json`, communicates over
+VXI-11, records the current source's display-interval average voltage, captures
+a PNG screen image, and creates a separate Excel report under
+`outputs/dsox1204g_measurements`.
+
 测试仍使用 mock adapter 作为离线夹具，避免单元测试消耗真实模型调用。

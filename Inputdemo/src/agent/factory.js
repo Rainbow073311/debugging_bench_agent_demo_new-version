@@ -2,7 +2,7 @@ import { BenchAgent } from "./benchAgent.js";
 import { MockRagRepository } from "../adapters/mockRagRepository.js";
 import { RobotGatewayClient } from "../adapters/robotGatewayClient.js";
 import { MockEquipmentController } from "../adapters/mockEquipmentController.js";
-import { Rto6EquipmentController } from "../adapters/rto6EquipmentController.js";
+import { createEquipmentController } from "../adapters/equipmentControllerFactory.js";
 import { ReportGenerator } from "../adapters/reportGenerator.js";
 import { VlmAgentCaseAdapter } from "../adapters/vlmAgentCaseAdapter.js";
 import { RealVlmAgentClient, RealVlmAgentModelClient } from "../adapters/realVlmAgentClient.js";
@@ -48,7 +48,7 @@ export function createDefaultAgent({ vlmRunner } = {}) {
     largeModelClient: new RealVlmAgentModelClient({ runner: realVlmRunner }),
     ragRepository: new MockRagRepository(),
     armController: new RobotGatewayClient(),
-    equipmentController: new Rto6EquipmentController(),
+    equipmentController: createEquipmentController(),
     reportGenerator: new ReportGenerator(),
     vlmAgentCaseAdapter: new VlmAgentCaseAdapter(),
   });

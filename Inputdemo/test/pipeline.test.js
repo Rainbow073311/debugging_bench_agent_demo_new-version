@@ -21,41 +21,76 @@ import { VlmAgentServiceRunner } from "../src/adapters/vlmAgentServiceRunner.js"
 import { RobotGatewayClient } from "../src/adapters/robotGatewayClient.js";
 import { Mg400ArmController } from "../src/adapters/mg400ArmController.js";
 import { Rto6EquipmentController } from "../src/adapters/rto6EquipmentController.js";
+import { Dsox1204gEquipmentController } from "../src/adapters/dsox1204gEquipmentController.js";
+import { createEquipmentController } from "../src/adapters/equipmentControllerFactory.js";
 import { evaluateMg400PoseReachability } from "../src/domain/mg400Reachability.js";
 import {
   VLM_COMPLETION_READY_POSE,
+  VLM_COMPLETION_SAFE_TRAJECTORY,
   createVlmCompletionReadyStep,
   postReadyTargetExecutionEnabled
 } from "../src/agent/vlmCompletionReadyMove.js";
+import { createMg400SafeTrajectory } from "../src/domain/mg400SafeTrajectory.js";
+import {
+  executeProbeSignalSearch,
+  retractProbeToStart
+} from "../src/agent/probeSignalSearch.js";
+import { PROBE_SIGNAL_SEARCH_CONFIG } from "../src/domain/probeSignalSearchConfig.js";
 
 test("bench agent runs the mocked VLM-to-report flow with image and PDF model inputs", async () => {
-  const simulationRequests = [];
-  const simulationServer = net.createServer((socket) => {
-    let buffer = "";
-    socket.setEncoding("utf8");
-    socket.on("data", (chunk) => {
-      buffer += chunk;
-      while (buffer.includes("\n")) {
-        const newline = buffer.indexOf("\n");
-        const line = buffer.slice(0, newline).trim();
-        buffer = buffer.slice(newline + 1);
-        simulationRequests.push(line);
-        if (line === "GetPose()") {
-          socket.write("0,{245.6000,-32.4000,78.2000,0,0,91.5000}\n");
-          continue;
-        }
-        socket.write("0,{1}\n");
+  const armCalls = [];
+  const mockArmController = {
+    async execute(step) {
+      return {
+        stepId: step.id,
+        status: "COMPLETED",
+        motionCommand: step.command,
+        targetLocationId: step.targetLocationId,
+        targetPose: step.targetPose,
+        executedPose: step.targetPose || { x: 304.667, y: -26.621, z: -128.252, r: 169.928 },
+        tcpCommand: "MovJ(···)",
+        controller: "mg400",
+        robot: { mode: { code: 5, label: "ENABLED_IDLE" } },
+        responses: ["0,{1}"],
+        trajectory: null,
+        durationMs: 10
+      };
+    },
+    async runCommand(action, payload = {}) {
+      armCalls.push({ action, payload });
+      if (action === "status") {
+        return {
+          robot: {
+            mode: { code: 5, label: "ENABLED_IDLE" },
+            pose: {
+              x: 307.660927,
+              y: -12.981141,
+              z: -128.251923,
+              r: 169.927811
+            }
+          }
+        };
       }
-    });
-  });
-  await new Promise((resolve) => simulationServer.listen(0, "127.0.0.1", resolve));
-  const { port } = simulationServer.address();
+      if (action === "command") {
+        const cmd = payload.command || {};
+        if (cmd.name === "probeStep") {
+          return {
+            robot: {
+              mode: { code: 5, label: "ENABLED_IDLE" },
+              pose: { ...cmd.pose }
+            }
+          };
+        }
+      }
+      return { ok: true };
+    }
+  };
 
   const agent = new BenchAgent({
     vlmClient: new MockVlmClient(),
     largeModelClient: new MockLargeModelClient(),
     ragRepository: new MockRagRepository(),
-    armController: new SimulationArmController({ port }),
+    armController: mockArmController,
     equipmentController: new MockEquipmentController(),
     reportGenerator: new ReportGenerator(),
     vlmAgentCaseAdapter: new VlmAgentCaseAdapter({
@@ -128,15 +163,16 @@ test("bench agent runs the mocked VLM-to-report flow with image and PDF model in
     });
     assert.deepEqual(run.plan.steps[0].targetPose, run.modelOutput.mg400Pose);
     assert.equal(run.plan.steps[0].reachabilityPrecheck.reachable, false);
-    assert.equal(run.execution.arm[0].controller, "simulation");
     assert.equal(run.execution.arm[0].status, "COMPLETED");
     assert.deepEqual(run.execution.arm[0].executedPose, VLM_COMPLETION_READY_POSE);
     assert.equal(run.execution.arm.length, 1);
-    assert.deepEqual(simulationRequests, [
-      "EnableRobot()",
-      "SpeedFactor(30)",
-      "MovJ(pose={368.487381,-26.022938,-130.549423,0,0,197.521088})"
-    ]);
+    // Probe signal search verified via runCommand calls
+    assert.ok(armCalls.some((c) => c.action === "status"), "probe search checked arm status");
+    assert.equal(run.execution.probeSearch.status, "SIGNAL_FOUND");
+    assert.equal(run.execution.probeSearch.signalDetected, true);
+    assert.equal(run.execution.probeSearch.stopReason, "threshold-reached-at-start");
+    assert.ok(run.execution.probeSearch.samples.length > 0, "voltage samples collected");
+    assert.equal(run.execution.probeRetract.status, "COMPLETED");
     assert.equal(run.ragEvidence.length, 0);
     assert.equal(run.vlmObservation.modelInputSummary.attachmentCount, 4);
     assert.equal(run.vlmObservation.modelInputSummary.bitImageCount, 2);
@@ -145,9 +181,9 @@ test("bench agent runs the mocked VLM-to-report flow with image and PDF model in
     assert.equal(run.execution.equipment[0].signal, "Current display: AMPL");
     assert.equal(run.execution.equipment[0].value, 3.3);
     assert.equal(run.report.measurements.length, 1);
-    assert.match(run.timeline.at(-1).message, /current RTO6 display/);
+    assert.match(run.timeline.at(-1).message, /probe descent finished.*display saved to Excel/);
   } finally {
-    await new Promise((resolve) => simulationServer.close(resolve));
+    // mock arm controller – nothing to clean up
   }
 });
 
@@ -156,14 +192,71 @@ test("VLM completion ready move preserves the operator-recorded pose exactly", (
 
   assert.equal(step.command, "MOVE_TO_VLM_COMPLETION_READY_POSE");
   assert.deepEqual(step.targetPose, {
-    x: 368.487381,
-    y: -26.022938,
-    z: -130.549423,
-    r: 197.521088
+    x: 307.660927,
+    y: -12.981141,
+    z: -128.251923,
+    r: 169.927811
   });
   assert.equal(step.reachabilityPrecheck.reachable, true);
   assert.equal(step.reachabilityPrecheck.adjusted, false);
   assert.deepEqual(step.reachabilityPrecheck.pose, step.targetPose);
+  assert.equal(step.trajectory, null);
+});
+
+test("MG400 safe trajectory keeps a start that is already above the configured travel height", () => {
+  const trajectory = createMg400SafeTrajectory(
+    { x: 245.6, y: -32.4, z: 78.2, r: 91.5 },
+    VLM_COMPLETION_READY_POSE,
+    VLM_COMPLETION_SAFE_TRAJECTORY
+  );
+
+  assert.equal(trajectory.safeTravelZ, 60);
+  assert.equal(trajectory.travelZ, 78.2);
+  assert.deepEqual(
+    trajectory.stages.map((stage) => ({
+      name: stage.name,
+      z: stage.targetPose.z,
+      speed: stage.speed
+    })),
+    [
+      { name: "traverse", z: 78.2, speed: 30 },
+      { name: "descend", z: -128.251923, speed: 10 }
+    ]
+  );
+});
+
+test("MG400 safe trajectory lifts a lower start to the configured travel height", () => {
+  const trajectory = createMg400SafeTrajectory(
+    { x: 230.549521, y: 104.660345, z: 16.656279, r: 195.039337 },
+    VLM_COMPLETION_READY_POSE,
+    VLM_COMPLETION_SAFE_TRAJECTORY
+  );
+
+  assert.equal(trajectory.safeTravelZ, 60);
+  assert.equal(trajectory.travelZ, 60);
+  assert.deepEqual(
+    trajectory.stages.map((stage) => ({
+      name: stage.name,
+      z: stage.targetPose.z,
+      speed: stage.speed
+    })),
+    [
+      { name: "lift", z: 60, speed: 30 },
+      { name: "traverse", z: 60, speed: 30 },
+      { name: "descend", z: -128.251923, speed: 10 }
+    ]
+  );
+});
+
+test("MG400 safe trajectory blocks a straight traverse through the inner workspace", () => {
+  assert.throws(
+    () => createMg400SafeTrajectory(
+      { x: 300, y: 0, z: 100, r: 0 },
+      { x: -259.808, y: 150, z: -100, r: 0 },
+      VLM_COMPLETION_SAFE_TRAJECTORY
+    ),
+    /traverse is outside the sampled workspace/
+  );
 });
 
 test("post-ready target execution stays paused unless explicitly enabled", () => {
@@ -174,6 +267,140 @@ test("post-ready target execution stays paused unless explicitly enabled", () =>
   assert.equal(postReadyTargetExecutionEnabled({
     ENABLE_POST_READY_TARGET_EXECUTION: "true"
   }), true);
+});
+
+function createProbeHarness({
+  readings = [],
+  mode = { code: 5, label: "ENABLED_IDLE" },
+  startPose = {
+    x: PROBE_SIGNAL_SEARCH_CONFIG.x,
+    y: PROBE_SIGNAL_SEARCH_CONFIG.y,
+    z: PROBE_SIGNAL_SEARCH_CONFIG.startZ,
+    r: PROBE_SIGNAL_SEARCH_CONFIG.r
+  }
+} = {}) {
+  let pose = { ...startPose };
+  const commands = [];
+  return {
+    commands,
+    armController: {
+      async runCommand(action, payload = {}) {
+        if (action === "status") {
+          return { robot: { mode, pose: { ...pose } } };
+        }
+        commands.push(payload.command);
+        pose = { ...payload.command.pose };
+        return { robot: { mode, pose: { ...pose } } };
+      }
+    },
+    equipmentController: {
+      async readMeanVoltage() {
+        const next = readings.shift();
+        if (next instanceof Error) throw next;
+        return { value: next, unit: "V", source: "CHANNEL2" };
+      }
+    }
+  };
+}
+
+test("probe search does not move when the start pose is already at 3 V", async () => {
+  const harness = createProbeHarness({ readings: [3.1, 3.2, 3.3] });
+  const result = await executeProbeSignalSearch({
+    ...harness,
+    config: { ...PROBE_SIGNAL_SEARCH_CONFIG, settleMs: 0 },
+    sleep: async () => {}
+  });
+  assert.equal(result.status, "SIGNAL_FOUND");
+  assert.equal(harness.commands.length, 0);
+});
+
+test("probe search stops after the exact step that first reaches 3 V", async () => {
+  const harness = createProbeHarness({ readings: [1.0, 2.0, 3.1, 3.2, 3.3] });
+  const result = await executeProbeSignalSearch({
+    ...harness,
+    config: {
+      ...PROBE_SIGNAL_SEARCH_CONFIG,
+      minimumZ: PROBE_SIGNAL_SEARCH_CONFIG.startZ - 0.5,
+      settleMs: 0
+    },
+    sleep: async () => {}
+  });
+  assert.equal(result.status, "SIGNAL_FOUND");
+  assert.equal(harness.commands.length, 2);
+  assert.equal(harness.commands.at(-1).pose.z, -128.451923);
+});
+
+test("probe search never resumes descent after an unstable threshold latch", async () => {
+  const harness = createProbeHarness({ readings: [1.0, 3.1, 2.9, 3.2] });
+  const result = await executeProbeSignalSearch({
+    ...harness,
+    config: {
+      ...PROBE_SIGNAL_SEARCH_CONFIG,
+      minimumZ: PROBE_SIGNAL_SEARCH_CONFIG.startZ - 0.5,
+      settleMs: 0
+    },
+    sleep: async () => {}
+  });
+  assert.equal(result.status, "SIGNAL_LATCHED_UNSTABLE");
+  assert.equal(result.signalDetected, true);
+  assert.equal(harness.commands.length, 1);
+});
+
+test("probe search stops at its fixed Z lower limit", async () => {
+  const harness = createProbeHarness({ readings: [1.0, 1.0, 1.0] });
+  const minimumZ = Number((PROBE_SIGNAL_SEARCH_CONFIG.startZ - 0.2).toFixed(6));
+  const result = await executeProbeSignalSearch({
+    ...harness,
+    config: {
+      ...PROBE_SIGNAL_SEARCH_CONFIG,
+      minimumZ,
+      settleMs: 0
+    },
+    sleep: async () => {}
+  });
+  assert.equal(result.status, "LIMIT_REACHED");
+  assert.equal(harness.commands.length, 2);
+  assert.equal(harness.commands.at(-1).pose.z, minimumZ);
+});
+
+test("probe search does not move on DSOX communication failure or non-idle MG400", async () => {
+  const communicationFailure = createProbeHarness({
+    readings: [new Error("scope offline")]
+  });
+  await assert.rejects(
+    executeProbeSignalSearch({
+      ...communicationFailure,
+      sleep: async () => {}
+    }),
+    /scope offline/
+  );
+  assert.equal(communicationFailure.commands.length, 0);
+
+  const nonIdle = createProbeHarness({
+    mode: { code: 7, label: "RUNNING" },
+    readings: [3.5]
+  });
+  await assert.rejects(
+    executeProbeSignalSearch({ ...nonIdle, sleep: async () => {} }),
+    /not ENABLED_IDLE/
+  );
+  assert.equal(nonIdle.commands.length, 0);
+});
+
+test("probe retraction uses one synchronized probeStep target at the fixed start pose", async () => {
+  const harness = createProbeHarness();
+  const result = await retractProbeToStart({
+    armController: harness.armController
+  });
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(harness.commands.length, 1);
+  assert.equal(harness.commands[0].name, "probeStep");
+  assert.deepEqual(harness.commands[0].pose, {
+    x: PROBE_SIGNAL_SEARCH_CONFIG.x,
+    y: PROBE_SIGNAL_SEARCH_CONFIG.y,
+    z: PROBE_SIGNAL_SEARCH_CONFIG.startZ,
+    r: PROBE_SIGNAL_SEARCH_CONFIG.r
+  });
 });
 
 test("RTO6 controller records the MEAN display without model-generated data", async () => {
@@ -234,6 +461,111 @@ test("RTO6 controller records the MEAN display without model-generated data", as
   assert.equal(workbookInput.measurement, "MEAN");
   assert.deepEqual(workbookInput.robotPose, VLM_COMPLETION_READY_POSE);
   assert.match(result.workbookPath, /\.xlsx$/);
+});
+
+test("DSOX1204G controller records the MEAN display through its parallel adapter", async () => {
+  const testDir = path.join(tmpdir(), `dsox1204g-controller-${Date.now()}`);
+  const configPath = path.join(testDir, "dsox1204g.json");
+  await mkdir(testDir, { recursive: true });
+  await writeFile(configPath, JSON.stringify({
+    host: "192.168.2.3",
+    transport: "vxi11",
+    measurementSlot: 1,
+    captureMode: "set_mean_then_capture",
+    desiredMeasurement: "MEAN",
+    meanInterval: "DISPLAY",
+    outputDir: testDir
+  }));
+  let workbookInput = null;
+  const controller = new Dsox1204gEquipmentController({
+    configPath,
+    async bridgeRunner({ config, screenshotPath }) {
+      assert.equal(config.transport, "vxi11");
+      assert.equal(config.desiredMeasurement, "MEAN");
+      return {
+        instrument: "KEYSIGHT TECHNOLOGIES,DSOX1204G,CNTEST,02.12",
+        host: config.host,
+        visaAddress: `TCPIP::${config.host}::inst0::INSTR`,
+        measurementSlot: 1,
+        measurement: "MEAN",
+        source: "CHANNEL2",
+        value: 3.287654,
+        unit: "V",
+        screenshotPath,
+        capturedAt: "2026-07-29T10:30:00+0800",
+        durationMs: 900
+      };
+    },
+    async excelRunner(input) {
+      workbookInput = input;
+      return {
+        outputPath: input.outputPath,
+        previewPath: input.outputPath.replace(/\.xlsx$/i, ".preview.png")
+      };
+    }
+  });
+
+  const result = await controller.captureCurrentDisplayReport({
+    runId: "run-dsox-test",
+    caseId: "case-dsox-test",
+    targetPoints: ["TP9"],
+    robotPose: VLM_COMPLETION_READY_POSE
+  });
+
+  assert.equal(result.instrument, "DSOX1204G");
+  assert.equal(result.stepId, "dsox1204g-current-display-capture");
+  assert.equal(result.measurement, "MEAN");
+  assert.equal(result.source, "CHANNEL2");
+  assert.equal(result.value, 3.287654);
+  assert.match(result.screenshotPath, /DSOX1204G_MEAN_.*\.png$/);
+  assert.match(workbookInput.scpiAddress, /TCPIP::192\.168\.2\.3::inst0::INSTR/);
+});
+
+test("DSOX1204G controller exposes a lightweight CHANNEL2 MEAN reader", async () => {
+  const testDir = path.join(tmpdir(), `dsox1204g-fast-reader-${Date.now()}`);
+  const configPath = path.join(testDir, "dsox1204g.json");
+  await mkdir(testDir, { recursive: true });
+  await writeFile(configPath, JSON.stringify({
+    host: "192.168.2.3",
+    transport: "vxi11",
+    probeMeasurementSource: "CHANNEL2",
+    meanInterval: "DISPLAY",
+    outputDir: testDir
+  }));
+  const controller = new Dsox1204gEquipmentController({
+    configPath,
+    async measurementRunner({ config }) {
+      assert.equal(config.probeMeasurementSource, "CHANNEL2");
+      return {
+        source: "CHANNEL2",
+        value: "3.125",
+        unit: "V",
+        durationMs: 75
+      };
+    }
+  });
+
+  assert.deepEqual(await controller.readMeanVoltage(), {
+    instrument: "DSOX1204G",
+    measurement: "MEAN",
+    source: "CHANNEL2",
+    value: 3.125,
+    unit: "V",
+    durationMs: 75
+  });
+});
+
+test("oscilloscope selector preserves RTO6 default and supports DSOX1204G", () => {
+  assert.ok(createEquipmentController({ env: {} }) instanceof Rto6EquipmentController);
+  assert.ok(
+    createEquipmentController({
+      env: { OSCILLOSCOPE_DRIVER: "dsox1204g" }
+    }) instanceof Dsox1204gEquipmentController
+  );
+  assert.throws(
+    () => createEquipmentController({ env: { OSCILLOSCOPE_DRIVER: "unknown" } }),
+    /Unsupported OSCILLOSCOPE_DRIVER/
+  );
 });
 
 test("bench agent stops later hardware actions when the VLM completion ready move fails", async () => {

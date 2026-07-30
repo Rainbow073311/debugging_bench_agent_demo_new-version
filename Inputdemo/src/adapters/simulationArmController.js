@@ -3,6 +3,7 @@ import net from "node:net";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { evaluateMg400PoseReachability } from "../domain/mg400Reachability.js";
+import { createMg400SafeTrajectory } from "../domain/mg400SafeTrajectory.js";
 
 function resolveSimulationDir() {
   const candidates = [
@@ -258,6 +259,10 @@ export class SimulationArmController {
     this.options = options;
   }
 
+  async runCommand(action, payload = {}) {
+    return SimulationArmController.runCommand(action, { ...payload, config: { ...this.options, ...payload.config } });
+  }
+
   async execute(step) {
     const { readMg400Config } = await import("./mg400Config.js");
     const config = { ...(await readMg400Config()), ...this.options, mode: "simulation" };
@@ -284,11 +289,18 @@ export class SimulationArmController {
     }
     await ensureSimulationStarted(config);
     const motionPose = reachability.pose;
-    const commands = [
-      "EnableRobot()",
-      `SpeedFactor(${speedValue(config)})`,
-      poseCommand(motionPose, config.motionCommand)
-    ];
+    let trajectory = null;
+    const commands = ["EnableRobot()", `SpeedFactor(${speedValue(config)})`];
+    if (step.trajectory?.mode === "safe-lift-traverse-descend") {
+      const current = await currentPose(config);
+      if (!current.pose) throw new Error("Current simulation pose is unavailable for safe trajectory planning.");
+      trajectory = createMg400SafeTrajectory(current.pose, motionPose, step.trajectory);
+      for (const stage of trajectory.stages) {
+        commands.push(poseCommand(stage.targetPose, "MovL"), "Sync()");
+      }
+    } else {
+      commands.push(poseCommand(motionPose, config.motionCommand));
+    }
     const responses = await sendDashboardCommands(commands, config);
     return {
       stepId: step.id,
@@ -298,10 +310,13 @@ export class SimulationArmController {
       targetPose: step.targetPose,
       executedPose: motionPose,
       reachability,
-      tcpCommand: commands[commands.length - 1],
+      tcpCommand: trajectory
+        ? poseCommand(trajectory.stages.at(-1)?.targetPose || motionPose, "MovL")
+        : commands[commands.length - 1],
       controller: "simulation",
       simulation: { host: commandHost(config), port: commandPort(config), protocol: "dashboard" },
       responses,
+      trajectory,
       durationMs: Date.now() - startedAt
     };
   }
@@ -333,6 +348,42 @@ export class SimulationArmController {
     if (name === "reset") return { ok: true, action: name, startup, result: await sendDashboardCommand("MovJ(joint={0,0,0,0,0,0})", config) };
     if (name === "jog") return { ok: true, action: name, startup, result: await sendDashboardCommand(`MoveJog(${String(command.axis || "").toUpperCase()})`, config) };
     if (name === "jogStop") return { ok: true, action: name, startup, result: await sendDashboardCommand("MoveJog()", config) };
+    if (name === "probeStep") {
+      const pose = await resolvePartialPose(config, command.pose);
+      const reachability = evaluateMg400PoseReachability(pose, { allowAdjustment: false, enforceLowZStallGuard: false });
+      if (!reachability.reachable) {
+        return {
+          ok: false,
+          action: name,
+          startup,
+          error: reachability.message,
+          reachability,
+          fallbackPose: reachability.fallbackPose || null,
+          fallbackAction: reachability.fallbackAction || "Request a recalibrated measurement target inside the MG400 workspace."
+        };
+      }
+      const motionPose = reachability.pose;
+      const commands = [
+        "EnableRobot()",
+        `SpeedFactor(${command.speedL !== undefined ? Math.round(command.speedL * 10) : speedValue(config)})`,
+        poseCommand(motionPose, "MovL"),
+        "Sync()"
+      ];
+      const responses = await sendDashboardCommands(commands, config);
+      const mode = await sendDashboardCommand("RobotMode()", config);
+      const current = await currentPose(config);
+      return {
+        ok: true,
+        action: name,
+        startup,
+        robot: { mode, pose: current.pose },
+        resolvedPose: pose,
+        executedPose: motionPose,
+        reachability,
+        command: commands[commands.length - 1],
+        responses
+      };
+    }
     if (name === "move") {
       const pose = await resolvePartialPose(config, command.pose);
       const reachability = evaluateMg400PoseReachability(pose);

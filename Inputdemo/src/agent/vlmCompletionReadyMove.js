@@ -1,11 +1,14 @@
 import { StepKind } from "../domain/states.js";
 import { evaluateMg400PoseReachability } from "../domain/mg400Reachability.js";
+import { probeSignalSearchStartPose } from "../domain/probeSignalSearchConfig.js";
 
-export const VLM_COMPLETION_READY_POSE = Object.freeze({
-  x: 368.487381,
-  y: -26.022938,
-  z: -130.549423,
-  r: 197.521088
+export const VLM_COMPLETION_READY_POSE = Object.freeze(probeSignalSearchStartPose());
+
+export const VLM_COMPLETION_SAFE_TRAJECTORY = Object.freeze({
+  mode: "safe-lift-traverse-descend",
+  safeTravelZ: 60,
+  travelSpeed: 30,
+  descentSpeed: 10
 });
 
 export function postReadyTargetExecutionEnabled(env = process.env) {
@@ -19,6 +22,7 @@ export function createVlmCompletionReadyStep() {
     command: "MOVE_TO_VLM_COMPLETION_READY_POSE",
     targetLocationId: "vlm-completion-ready-position",
     targetPose: { ...VLM_COMPLETION_READY_POSE },
+    trajectory: null,
     reachabilityPrecheck: evaluateMg400PoseReachability(VLM_COMPLETION_READY_POSE)
   };
 }

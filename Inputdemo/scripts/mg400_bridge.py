@@ -1,4 +1,5 @@
 import json
+import math
 import socket
 import sys
 import time
@@ -10,6 +11,25 @@ DEFAULT_LIMITS = {
     "z": (-250.0, 250.0),
     "r": (-360.0, 360.0),
 }
+
+WORKSPACE_BOUNDARY = [
+    (-250.0, 200.0, 360.0),
+    (-100.0, 200.0, 380.0),
+    (0.0, 205.0, 400.0),
+    (10.391, 229.49, 328.019),
+    (18.604, 228.507, 351.188),
+    (26.816, 227.117, 365.915),
+    (78.2, 209.433, 423.98),
+    (100.0, 197.584, 438.7),
+    (150.0, 133.358, 455.014),
+    (317.2, 198.192, 423.032),
+    (343.2, 197.277, 409.038),
+    (396.371, 181.223, 348.0),
+    (404.583, 188.86, 332.291),
+    (412.796, 204.588, 315.923),
+]
+WORKSPACE_MARGIN_MM = 5.0
+SEGMENT_SAMPLE_COUNT = 24
 
 MODE_LABELS = {
     1: "INIT",
@@ -98,6 +118,13 @@ class Mg400:
         try:
             return self._send(self.motion, command)
         except socket.timeout:
+            if command.strip().startswith("Sync"):
+                return {
+                    "command": command,
+                    "response": "timeout while waiting for motion completion",
+                    "errorId": -1,
+                    "ok": False,
+                }
             return {"command": command, "response": "timeout; command may still be accepted", "errorId": 0, "ok": True}
 
     def robot_mode(self):
@@ -173,6 +200,116 @@ def format_number(value):
 
 def speed_value(config):
     return int(float(config.get("speed", 30)))
+
+
+def bounded_speed(value, fallback, label):
+    speed = int(round(float(fallback if value is None else value)))
+    if speed < 1 or speed > 100:
+        raise Mg400Error(f"{label} must be between 1 and 100")
+    return speed
+
+
+def interpolate_workspace(z):
+    if z <= WORKSPACE_BOUNDARY[0][0]:
+        return WORKSPACE_BOUNDARY[0][1], WORKSPACE_BOUNDARY[0][2]
+    if z >= WORKSPACE_BOUNDARY[-1][0]:
+        return WORKSPACE_BOUNDARY[-1][1], WORKSPACE_BOUNDARY[-1][2]
+    for index in range(1, len(WORKSPACE_BOUNDARY)):
+        prev = WORKSPACE_BOUNDARY[index - 1]
+        nxt = WORKSPACE_BOUNDARY[index]
+        if z <= nxt[0]:
+            ratio = (z - prev[0]) / (nxt[0] - prev[0])
+            return (
+                prev[1] + ((nxt[1] - prev[1]) * ratio),
+                prev[2] + ((nxt[2] - prev[2]) * ratio),
+            )
+    return WORKSPACE_BOUNDARY[-1][1], WORKSPACE_BOUNDARY[-1][2]
+
+
+def validate_workspace_pose(pose, label):
+    clean = validate_pose(pose)
+    radius = (clean["x"] ** 2 + clean["y"] ** 2) ** 0.5
+    theta = math.degrees(math.atan2(clean["y"], clean["x"]))
+    z_low = WORKSPACE_BOUNDARY[0][0] + WORKSPACE_MARGIN_MM
+    z_high = WORKSPACE_BOUNDARY[-1][0] - WORKSPACE_MARGIN_MM
+    if clean["z"] < z_low or clean["z"] > z_high:
+        raise Mg400Error(
+            f"{label} Z={clean['z']} is outside sampled workspace [{z_low}, {z_high}]"
+        )
+    radial_low, radial_high = interpolate_workspace(clean["z"])
+    radial_low += WORKSPACE_MARGIN_MM
+    radial_high -= WORKSPACE_MARGIN_MM
+    if abs(theta) > 160:
+        raise Mg400Error(f"{label} base angle {theta:.1f} exceeds +/-160 degrees")
+    if radius < radial_low or radius > radial_high:
+        raise Mg400Error(
+            f"{label} radius {radius:.1f} is outside [{radial_low:.1f}, {radial_high:.1f}] "
+            f"at Z={clean['z']:.1f}"
+        )
+    return clean
+
+
+def validate_linear_segment(start, end, label):
+    for index in range(SEGMENT_SAMPLE_COUNT + 1):
+        ratio = index / SEGMENT_SAMPLE_COUNT
+        sample = {
+            key: start[key] + ((end[key] - start[key]) * ratio)
+            for key in ("x", "y", "z", "r")
+        }
+        validate_workspace_pose(sample, f"{label} sample {index}/{SEGMENT_SAMPLE_COUNT}")
+
+
+def motion_command(command_name, pose, speed):
+    speed_key = "SpeedL" if command_name == "MovL" else "SpeedJ"
+    return (
+        f"{command_name}({format_number(pose['x'])},{format_number(pose['y'])},"
+        f"{format_number(pose['z'])},{format_number(pose['r'])},"
+        f"{speed_key}={speed})"
+    )
+
+
+def build_safe_trajectory(current_pose, target_pose, options):
+    start = validate_pose(current_pose)
+    target = validate_pose(target_pose)
+    safe_travel_z = float(options.get("safeTravelZ", 100))
+    travel_speed = bounded_speed(options.get("travelSpeed"), 30, "Travel speed")
+    descent_speed = bounded_speed(options.get("descentSpeed"), 10, "Descent speed")
+    travel_z = max(start["z"], safe_travel_z)
+    lift = {**start, "z": travel_z}
+    traverse = {
+        "x": target["x"],
+        "y": target["y"],
+        "z": travel_z,
+        "r": target["r"],
+    }
+    candidates = [
+        ("lift", lift, travel_speed),
+        ("traverse", traverse, travel_speed),
+        ("descend", target, descent_speed),
+    ]
+    stages = []
+    segment_start = start
+    for name, stage_pose, stage_speed in candidates:
+        if all(abs(segment_start[key] - stage_pose[key]) <= 0.001 for key in ("x", "y", "z", "r")):
+            continue
+        validate_linear_segment(segment_start, stage_pose, name)
+        stages.append({
+            "name": name,
+            "targetPose": stage_pose,
+            "speed": stage_speed,
+            "command": motion_command("MovL", stage_pose, stage_speed),
+        })
+        segment_start = stage_pose
+    return {
+        "mode": "safe-lift-traverse-descend",
+        "safeTravelZ": safe_travel_z,
+        "travelZ": travel_z,
+        "travelSpeed": travel_speed,
+        "descentSpeed": descent_speed,
+        "startPose": start,
+        "targetPose": target,
+        "stages": stages,
+    }
 
 
 def status(robot):
@@ -257,21 +394,37 @@ def action_status(payload):
 def action_execute(payload):
     config = payload["config"]
     pose = validate_pose(payload["pose"])
+    trajectory_options = payload.get("trajectory")
     command_name = config.get("motionCommand", "MovJ")
-    speed_key = "SpeedL" if command_name == "MovL" else "SpeedJ"
-    command = (
-        f"{command_name}({format_number(pose['x'])},{format_number(pose['y'])},"
-        f"{format_number(pose['z'])},{format_number(pose['r'])},"
-        f"{speed_key}={speed_value(config)})"
-    )
+    command = motion_command(command_name, pose, speed_value(config))
 
     robot = Mg400(config)
     responses = []
+    trajectory = None
     try:
         robot.connect()
         responses.extend(prepare_for_motion(robot, config))
-        responses.append(require_ok(robot.move(command)))
-        responses.append(require_ok(robot.move("Sync()")))
+        if (
+            isinstance(trajectory_options, dict)
+            and trajectory_options.get("mode") == "safe-lift-traverse-descend"
+        ):
+            trajectory_mode = robot.robot_mode()
+            if trajectory_mode["code"] != 5:
+                raise Mg400Error(
+                    f"Safe trajectory requires ENABLED_IDLE (5), got "
+                    f"{trajectory_mode['label']} ({trajectory_mode['code']})"
+                )
+            current_pose = robot.get_pose()["pose"]
+            if not current_pose:
+                raise Mg400Error("Current robot pose is unavailable for safe trajectory planning")
+            trajectory = build_safe_trajectory(current_pose, pose, trajectory_options)
+            for stage in trajectory["stages"]:
+                responses.append(require_ok(robot.move(stage["command"])))
+                responses.append(require_ok(robot.move("Sync()")))
+            command = trajectory["stages"][-1]["command"] if trajectory["stages"] else None
+        else:
+            responses.append(require_ok(robot.move(command)))
+            responses.append(require_ok(robot.move("Sync()")))
         if config.get("returnHome"):
             home = validate_pose(config["homePose"])
             home_command = (
@@ -285,6 +438,7 @@ def action_execute(payload):
             "action": "execute",
             "command": command,
             "responses": responses,
+            "trajectory": trajectory,
             "robot": status(robot),
         }
     finally:
@@ -346,6 +500,37 @@ def action_command(payload):
         elif name == "jogStop":
             robot.connect_motion()
             result = require_ok(robot.move("MoveJog()"))
+        elif name == "probeStep":
+            robot.connect()
+            mode = robot.robot_mode()
+            if mode["code"] != 5:
+                raise Mg400Error(
+                    f"Probe step requires ENABLED_IDLE (5), got "
+                    f"{mode['label']} ({mode['code']})"
+                )
+            pose = validate_pose(command.get("pose", {}))
+            speed_l = float(command.get("speedL", 1))
+            acc_l = float(command.get("accL", 1))
+            cp = float(command.get("cp", 0))
+            if not 1 <= speed_l <= 100:
+                raise Mg400Error("probeStep SpeedL must be between 1 and 100")
+            if not 1 <= acc_l <= 100:
+                raise Mg400Error("probeStep AccL must be between 1 and 100")
+            if not 0 <= cp <= 100:
+                raise Mg400Error("probeStep CP must be between 0 and 100")
+            move_command = (
+                f"MovL({format_number(pose['x'])},{format_number(pose['y'])},"
+                f"{format_number(pose['z'])},{format_number(pose['r'])},"
+                f"SpeedL={format_number(speed_l)},AccL={format_number(acc_l)},"
+                f"CP={format_number(cp)})"
+            )
+            move_result = require_ok(robot.move(move_command))
+            sync_result = require_ok(robot.move("Sync()"))
+            result = {
+                "command": move_command,
+                "resolvedPose": pose,
+                "responses": [move_result, sync_result],
+            }
         elif name == "move":
             robot.connect()
             prepare = prepare_for_motion(robot, config)

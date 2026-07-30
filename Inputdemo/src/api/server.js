@@ -13,7 +13,7 @@ import { readMg400Config, writeMg400Config } from "../adapters/mg400Config.js";
 import { VlmAgentCaseAdapter } from "../adapters/vlmAgentCaseAdapter.js";
 import { VlmAgentServiceRunner } from "../adapters/vlmAgentServiceRunner.js";
 import { RemoteVlmAgentServiceRunner } from "../adapters/remoteVlmAgentServiceRunner.js";
-import { Rto6EquipmentController } from "../adapters/rto6EquipmentController.js";
+import { createEquipmentController } from "../adapters/equipmentControllerFactory.js";
 import { ReportGenerator } from "../adapters/reportGenerator.js";
 import { getEthernetInfo, autoDetectAdapter } from "../adapters/ethernetConfig.js";
 import { defaultVlmAgentRunsDir } from "../adapters/defaultPaths.js";
@@ -23,6 +23,7 @@ import {
   postReadyTargetExecutionEnabled,
   vlmCompletionReadyMoveSucceeded
 } from "../agent/vlmCompletionReadyMove.js";
+import { executeProbeSignalSearch } from "../agent/probeSignalSearch.js";
 
 const port = Number(process.env.PORT || 3000);
 
@@ -40,7 +41,7 @@ if (runnerMode === "remote-svc" || shouldUseRemoteVlmService(process.env.VLM_AGE
 const serviceCaseAdapter = new VlmAgentCaseAdapter();
 const robotGateway = new RobotGatewayClient();
 const serviceArmController = robotGateway;
-const serviceEquipmentController = new Rto6EquipmentController();
+const serviceEquipmentController = createEquipmentController();
 const serviceReportGenerator = new ReportGenerator();
 const vlmStatus = new VlmStatusMonitor({
   workerCount: Number(process.env.VLM_MONITOR_WORKERS || 2)
@@ -396,28 +397,78 @@ async function finalizeSplitServiceRun(parentRunId) {
       pixel: reportPoint.pixel,
       pointId: reportPoint.id
     });
-    const measurement = await serviceEquipmentController.captureCurrentDisplayReport({
-      runId: parentRunId,
-      caseId: run.input.caseId,
-      targetPoints: allPoints.map((point) => point.id),
-      robotPose: readyMove.result.executedPose || readyMove.step.targetPose
-    });
-    run.execution.equipment.push(measurement);
-    appendRunEvent(parentRunId, "equipment.rto6_capture_finished", {
-      targetPoints: allPoints.map((point) => point.id),
-      result: measurement
-    });
+    let measurement;
+    let probeSearch;
+    let flowError = null;
+    try {
+      probeSearch = await executeProbeSignalSearch({
+        armController: serviceArmController,
+        equipmentController: serviceEquipmentController,
+        onEvent: ({ type, payload }) => appendRunEvent(parentRunId, type, payload)
+      });
+      run.execution.arm.push(...probeSearch.movements);
+      appendRunEvent(parentRunId, "probe.signal_search_finished", {
+        status: probeSearch.status,
+        stopReason: probeSearch.stopReason,
+        thresholdV: probeSearch.thresholdV,
+        finalPose: probeSearch.finalPose,
+        sampleCount: probeSearch.samples.length,
+        signalConfirmed: probeSearch.signalConfirmed
+      });
+      if (!probeSearch.signalDetected) {
+        throw new Error(
+          "Probe search reached the fixed Z lower limit without detecting a CHANNEL2 MEAN voltage of 3 V or more."
+        );
+      }
+
+      measurement = await serviceEquipmentController.captureCurrentDisplayReport({
+        runId: parentRunId,
+        caseId: run.input.caseId,
+        targetPoints: allPoints.map((point) => point.id),
+        robotPose: probeSearch.finalPose
+      });
+      run.execution.equipment.push(measurement);
+      appendRunEvent(parentRunId, "equipment.dsox1204g_capture_finished", {
+        targetPoints: allPoints.map((point) => point.id),
+        result: measurement
+      });
+    } catch (error) {
+      flowError = error;
+    }
+
+    if (flowError) {
+      run.error = flowError.message;
+      transition(
+        run,
+        AgentState.REPORTING,
+        "Probe signal search stopped safely; the measurement report was not completed."
+      );
+      run.report = serviceReportGenerator.create({
+        run,
+        ragEvidence: run.ragEvidence || [],
+        vlmObservation: run.vlmObservation,
+        measurements: run.execution.equipment
+      });
+      appendRunEvent(parentRunId, "node.failed", {
+        error: run.error,
+        details: flowError.details || null,
+        probeSearch
+      });
+      vlmStatus.markRunFailed(parentRunId, flowError);
+      updateRun(parentRunId, run);
+      return;
+    }
 
     vlmStatus.markMg400("idle", {
       runId: parentRunId,
       stepId: readyMove.step.id,
       action: "MG400 已到达固定点并保持静止",
-      result: readyMove.result
+      result: probeSearch
     });
     transition(
       run,
       AgentState.REPORTING,
-      "VLM completed; MG400 is holding at the fixed measurement position, and the current RTO6 display was saved to Excel."
+      `VLM completed; the probe stopped at the first 3 V threshold crossing and remained there, and the ${measurement.instrument} display was saved to Excel.`
     );
     run.report = serviceReportGenerator.create({
       run,
