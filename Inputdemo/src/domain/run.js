@@ -13,7 +13,8 @@ export function createBenchRun(input) {
     ragEvidence: [],
     execution: {
       arm: [],
-      equipment: []
+      equipment: [],
+      camera: null
     },
     report: null,
     timeline: []

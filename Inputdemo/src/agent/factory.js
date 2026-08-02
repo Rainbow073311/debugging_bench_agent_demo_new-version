@@ -8,6 +8,7 @@ import { VlmAgentCaseAdapter } from "../adapters/vlmAgentCaseAdapter.js";
 import { RealVlmAgentClient, RealVlmAgentModelClient } from "../adapters/realVlmAgentClient.js";
 import { VlmAgentServiceRunner } from "../adapters/vlmAgentServiceRunner.js";
 import { RemoteVlmAgentServiceRunner } from "../adapters/remoteVlmAgentServiceRunner.js";
+import { EyeInHandCameraController } from "../adapters/eyeInHandCameraController.js";
 
 /**
  * Decide which VLM runner to use based on environment:
@@ -51,6 +52,7 @@ export function createDefaultAgent({ vlmRunner } = {}) {
     equipmentController: createEquipmentController(),
     reportGenerator: new ReportGenerator(),
     vlmAgentCaseAdapter: new VlmAgentCaseAdapter(),
+    eyeInHandCameraController: new EyeInHandCameraController(),
   });
 }
 

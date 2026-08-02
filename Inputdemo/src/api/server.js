@@ -24,6 +24,8 @@ import {
   vlmCompletionReadyMoveSucceeded
 } from "../agent/vlmCompletionReadyMove.js";
 import { executeProbeSignalSearch } from "../agent/probeSignalSearch.js";
+import { executeEyeInHandCaptureWorkflow } from "../agent/eyeInHandCaptureWorkflow.js";
+import { EyeInHandCameraController } from "../adapters/eyeInHandCameraController.js";
 
 const port = Number(process.env.PORT || 3000);
 
@@ -43,6 +45,7 @@ const robotGateway = new RobotGatewayClient();
 const serviceArmController = robotGateway;
 const serviceEquipmentController = createEquipmentController();
 const serviceReportGenerator = new ReportGenerator();
+const serviceCameraController = new EyeInHandCameraController();
 const vlmStatus = new VlmStatusMonitor({
   workerCount: Number(process.env.VLM_MONITOR_WORKERS || 2)
 });
@@ -193,6 +196,14 @@ async function startServiceBackedRun(input) {
   const run = createBenchRun(input);
   run.serviceMode = true;
   transition(run, AgentState.PREPARING, "Parsed input; creating VLM task with split planner.");
+  saveRun(run);
+  await executeEyeInHandCaptureWorkflow({
+    run,
+    input,
+    armController: serviceArmController,
+    cameraController: serviceCameraController,
+    onEvent: (type, payload) => appendRunEvent(run.runId, type, payload)
+  });
   run.vlmAgentCase = await serviceCaseAdapter.adapt({ runId: run.runId, input });
 
   const workspace = serviceWorkspace(input, run.runId);

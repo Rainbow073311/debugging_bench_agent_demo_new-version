@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import yaml
 
-from calibration.calibrate_extrinsics import build_extrinsics, load_dataset
+from calibration.calibrate_extrinsics import build_extrinsics, load_dataset, write_config as write_calibration_config
 from calibration.coordinate_transforms import PixelToWorld
 from calibration.eye_in_hand_xyz import (
     compose_base_to_camera,
@@ -185,6 +185,17 @@ def test_calibration_dataset_and_output_schema(tmp_path):
     assert output["robot_axes_used"] == ["x", "y", "z"]
     assert output["robot_axes_ignored"] == ["r"]
     assert "T_base_to_cam" not in output
+
+
+def test_extrinsic_write_replaces_fixed_camera_homography_with_target_plane(tmp_path):
+    config = tmp_path / "camera.yaml"
+    write_config(config, calibrated_extrinsics())
+    write_calibration_config(config, calibrated_extrinsics(), target_plane_z_mm=-228.0)
+    written = yaml.safe_load(config.read_text(encoding="utf-8"))
+    assert written["table_homography"]["table_z_mm"] == -228.0
+    assert written["table_homography"]["source"] == "eye_in_hand_target_plane_in_robot_base"
+    assert "H" not in written["table_homography"]
+    assert "H" in written["legacy_table_homography_do_not_use"]
 
 
 def test_standalone_vlm_calibration_copy_matches_canonical_files():

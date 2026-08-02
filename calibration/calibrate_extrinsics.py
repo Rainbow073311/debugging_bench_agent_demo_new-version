@@ -7,6 +7,7 @@ explicitly ignored.
 Dataset format::
 
     {
+      "target_plane_z_mm": -228.0,
       "marker_pose_in_base": {
         "translation_mm": [300, 0, -228],
         "R": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
@@ -84,7 +85,7 @@ def build_extrinsics(calibration, sample_count):
     }
 
 
-def write_config(config_path, extrinsics):
+def write_config(config_path, extrinsics, target_plane_z_mm=None):
     with open(config_path, "r", encoding="utf-8") as file:
         config = yaml.safe_load(file) or {}
 
@@ -92,6 +93,16 @@ def write_config(config_path, extrinsics):
     if legacy and "T_base_to_cam" in legacy:
         config["legacy_extrinsics_do_not_use"] = legacy
     config["extrinsics"] = extrinsics
+    if target_plane_z_mm is not None:
+        previous_plane = config.get("table_homography")
+        if previous_plane and "H" in previous_plane:
+            config["legacy_table_homography_do_not_use"] = previous_plane
+        config["table_homography"] = {
+            "table_z_mm": float(target_plane_z_mm),
+            "source": "eye_in_hand_target_plane_in_robot_base",
+            "note": "Only the base-frame plane Z is used; no fixed-camera H is reused.",
+        }
+
 
     with open(config_path, "w", encoding="utf-8") as file:
         yaml.safe_dump(
@@ -124,6 +135,12 @@ def parse_args(argv=None):
     )
     parser.add_argument("--minimum-samples", type=int, default=5)
     parser.add_argument("--minimum-axis-span-mm", type=float, default=10.0)
+    parser.add_argument(
+        "--target-plane-z-mm",
+        type=float,
+        default=None,
+        help="PCB/table plane Z in robot-base millimetres; overrides dataset target_plane_z_mm",
+    )
     return parser.parse_args(argv)
 
 
@@ -142,6 +159,7 @@ def main(argv=None):
     extrinsics = build_extrinsics(calibration, len(samples))
 
     print("XYZ-only eye-in-hand calibration")
+    target_plane_z_mm = args.target_plane_z_mm if args.target_plane_z_mm is not None else dataset.get("target_plane_z_mm")
     print("  robot axes used: X, Y, Z")
     print("  robot axes ignored: R")
     print(
@@ -154,7 +172,10 @@ def main(argv=None):
     print(f"  max marker residual: {calibration.max_residual_mm:.4f} mm")
 
     if args.write:
-        write_config(args.config, extrinsics)
+        if target_plane_z_mm is None:
+            raise ValueError("target_plane_z_mm is required with --write for safe ray/plane projection")
+        write_config(args.config, extrinsics, target_plane_z_mm)
+        print(f"  target PCB/table plane Z: {float(target_plane_z_mm):.4f} mm")
         print(f"  wrote: {args.config}")
     else:
         print("  dry-run only; pass --write after reviewing the quality metrics")

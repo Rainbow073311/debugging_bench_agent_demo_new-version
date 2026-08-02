@@ -10,9 +10,10 @@ import {
   executeProbeSignalSearch,
   retractProbeToStart
 } from "./probeSignalSearch.js";
+import { executeEyeInHandCaptureWorkflow } from "./eyeInHandCaptureWorkflow.js";
 
 export class BenchAgent {
-  constructor({ vlmClient, largeModelClient, ragRepository, armController, equipmentController, reportGenerator, vlmAgentCaseAdapter = null }) {
+  constructor({ vlmClient, largeModelClient, ragRepository, armController, equipmentController, reportGenerator, vlmAgentCaseAdapter = null, eyeInHandCameraController = null, eyeInHandCaptureConfig = undefined }) {
     this.vlmClient = vlmClient;
     this.largeModelClient = largeModelClient;
     this.ragRepository = ragRepository;
@@ -20,12 +21,21 @@ export class BenchAgent {
     this.equipmentController = equipmentController;
     this.reportGenerator = reportGenerator;
     this.vlmAgentCaseAdapter = vlmAgentCaseAdapter;
+    this.eyeInHandCameraController = eyeInHandCameraController;
+    this.eyeInHandCaptureConfig = eyeInHandCaptureConfig;
   }
 
   async run(input) {
     const run = createBenchRun(input);
 
     transition(run, AgentState.PREPARING, "Parsed 6-field input; building Debugging-agent-v2 task and running VLM without RAG.");
+    await executeEyeInHandCaptureWorkflow({
+      run,
+      input,
+      armController: this.armController,
+      cameraController: this.eyeInHandCameraController,
+      ...(this.eyeInHandCaptureConfig ? { config: this.eyeInHandCaptureConfig } : {})
+    });
     if (this.vlmAgentCaseAdapter) {
       run.vlmAgentCase = await this.vlmAgentCaseAdapter.adapt({
         runId: run.runId,
