@@ -4,7 +4,9 @@ const DEFAULTS = Object.freeze({
   burstIntervalMs: 350,
   maxPoseAgeMs: 1500,
   minSharpness: 35,
-  safeTravelZ: 50,
+  globalZ: 50,
+  closeZ: -43.59,
+  safeTravelZ: -43.59,
   fixedR: 7.686619,
   travelSpeed: 20,
   descentSpeed: 8
@@ -20,7 +22,7 @@ function finiteNumber(value, fallback, label) {
   return result;
 }
 
-function parsePose(value) {
+function parsePose(value, globalZ) {
   if (!value) return null;
   let pose;
   try {
@@ -29,9 +31,10 @@ function parsePose(value) {
     throw new Error("EYE_IN_HAND_GLOBAL_POSE_JSON must be valid JSON.");
   }
   const clean = {};
-  for (const key of ["x", "y", "z"]) {
+  for (const key of ["x", "y"]) {
     clean[key] = finiteNumber(pose?.[key], undefined, `Global pose ${key.toUpperCase()}`);
   }
+  clean.z = globalZ;
   // Camera geometry deliberately uses only robot X/Y/Z. R is held at the live value.
   return clean;
 }
@@ -39,10 +42,17 @@ function parsePose(value) {
 export function readEyeInHandCaptureConfig(env = process.env) {
   const captureEnabled = enabled(env.ENABLE_EYE_IN_HAND_CAPTURE);
   const motionEnabled = enabled(env.ENABLE_EYE_IN_HAND_MOTION);
-  const globalPose = parsePose(env.EYE_IN_HAND_GLOBAL_POSE_JSON);
-  const closeZ = env.EYE_IN_HAND_CLOSE_Z_MM === undefined
-    ? null
-    : finiteNumber(env.EYE_IN_HAND_CLOSE_Z_MM, undefined, "Close capture Z");
+  const globalZ = finiteNumber(
+    env.EYE_IN_HAND_GLOBAL_Z_MM,
+    DEFAULTS.globalZ,
+    "Global capture Z"
+  );
+  const globalPose = parsePose(env.EYE_IN_HAND_GLOBAL_POSE_JSON, globalZ);
+  const closeZ = finiteNumber(
+    env.EYE_IN_HAND_CLOSE_Z_MM,
+    DEFAULTS.closeZ,
+    "Close capture Z"
+  );
 
   return {
     captureEnabled,

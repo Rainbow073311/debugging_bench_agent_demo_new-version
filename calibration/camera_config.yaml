@@ -261,5 +261,7 @@ xy_pose_correction:
     median_error_mm: 0.9096
     max_error_mm: 1.3954
 runtime_safety:
-  safe_height_z_mm: 50.0
+  global_capture_z_mm: 50.0
+  close_capture_z_mm: -43.59
+  safe_height_z_mm: -43.59
   fixed_r_deg: 7.686619

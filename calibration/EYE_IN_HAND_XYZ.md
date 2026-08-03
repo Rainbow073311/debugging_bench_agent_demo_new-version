@@ -163,8 +163,10 @@ installation-specific poses:
 ```powershell
 $env:ENABLE_EYE_IN_HAND_CAPTURE = "true"
 $env:ENABLE_EYE_IN_HAND_MOTION = "true"
-$env:EYE_IN_HAND_GLOBAL_POSE_JSON = '{"x":345.5,"y":-40.8,"z":120}'
-$env:EYE_IN_HAND_CLOSE_Z_MM = "50"
+$env:EYE_IN_HAND_GLOBAL_POSE_JSON = '{"x":345.5,"y":-40.8}'
+$env:EYE_IN_HAND_GLOBAL_Z_MM = "50"
+$env:EYE_IN_HAND_CLOSE_Z_MM = "-43.59"
+$env:EYE_IN_HAND_SAFE_TRAVEL_Z_MM = "-43.59"
 ```
 
 Those numeric examples are schema examples, not validated poses for the real
@@ -172,6 +174,10 @@ installation. Set them only after reachability and clearance review. Optional
 settings include `EYE_IN_HAND_CAMERA_INDEX`, `EYE_IN_HAND_SETTLE_MS`,
 `EYE_IN_HAND_MIN_SHARPNESS`, `EYE_IN_HAND_CAPTURE_DIR`, and
 `EYE_IN_HAND_CALIBRATION_FILE`.
+
+The requested close and travel height `-43.59 mm` is outside the currently
+calibrated robot-Z interval `50..140 mm`. Runtime range checks therefore block
+the first motion command until calibration data covering `-43.59 mm` is added.
 
 Motion is blocked before the first command when calibration is not
 `calibrated`, and close motion is blocked for zero or multiple PCB candidates.

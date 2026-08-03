@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createBenchRun } from "../src/domain/run.js";
 import { executeEyeInHandCaptureWorkflow } from "../src/agent/eyeInHandCaptureWorkflow.js";
+import { readEyeInHandCaptureConfig } from "../src/domain/eyeInHandCaptureConfig.js";
 import { BenchAgent } from "../src/agent/benchAgent.js";
 import { MockVlmClient } from "../src/adapters/mockVlmClient.js";
 import { MockLargeModelClient } from "../src/adapters/mockLargeModelClient.js";
@@ -51,6 +52,15 @@ function armMock(statuses) {
     }
   };
 }
+
+test("eye-in-hand height defaults use the requested low-travel capture profile", () => {
+  const result = readEyeInHandCaptureConfig({
+    EYE_IN_HAND_GLOBAL_POSE_JSON: '{"x":345.5,"y":-40.8,"z":999}'
+  });
+  assert.deepEqual(result.globalPose, { x: 345.5, y: -40.8, z: 50 });
+  assert.equal(result.closeZ, -43.59);
+  assert.equal(result.trajectory.safeTravelZ, -43.59);
+});
 
 test("eye-in-hand workflow is inert when capture is disabled", async () => {
   const run = createBenchRun({ command: "test" });
