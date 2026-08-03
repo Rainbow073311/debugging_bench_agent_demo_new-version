@@ -55,16 +55,37 @@ def sharpness(frame: np.ndarray) -> float:
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
-def open_camera(payload: dict[str, Any]) -> cv2.VideoCapture:
+class BaslerCameraAdapter:
+    def __init__(self, settings: dict[str, Any]):
+        from calibration.capture_basler_intrinsics import _open_camera
+
+        self._camera = _open_camera(settings)
+
+    def read(self):
+        from calibration.capture_basler_intrinsics import _capture
+
+        return True, _capture(self._camera)
+
+    def release(self):
+        self._camera.Close()
+
+
+def open_camera(payload: dict[str, Any]):
+    config_file = calibration_path(payload)
+    data = {}
+    if config_file.exists():
+        data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        calibration = data.get("calibration", {})
+        if str(calibration.get("camera_model", "")).lower().startswith("basler"):
+            return BaslerCameraAdapter(calibration)
+
     index = int(payload.get("cameraIndex", 0))
     backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
     camera = cv2.VideoCapture(index, backend)
     if not camera.isOpened():
         camera.release()
         raise RuntimeError(f"Cannot open camera index {index}.")
-    config_file = calibration_path(payload)
-    if config_file.exists():
-        data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+    if data:
         resolution = data.get("calibration", {}).get("resolution", [])
         if len(resolution) == 2:
             camera.set(cv2.CAP_PROP_FRAME_WIDTH, int(resolution[0]))
@@ -139,6 +160,56 @@ def capture_burst(payload: dict[str, Any]) -> dict[str, Any]:
 def board_candidates(image: np.ndarray) -> list[dict[str, Any]]:
     height, width = image.shape[:2]
     image_area = float(height * width)
+
+    # The current fixture uses a red PCB on a green ESD mat. Color isolation
+    # keeps the black cable and dense component edges from breaking the board
+    # outline. Fall back to the generic edge detector for other board colors.
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hue, saturation, value = cv2.split(hsv)
+    red_mask = (
+        (((hue < 15) | (hue > 170)) & (saturation > 70) & (value > 35))
+        .astype(np.uint8)
+        * 255
+    )
+    red_mask = cv2.morphologyEx(
+        red_mask,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+    )
+    red_mask = cv2.morphologyEx(
+        red_mask,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (35, 35)),
+        iterations=2,
+    )
+    red_contours, _ = cv2.findContours(
+        red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    red_candidates = []
+    for contour in red_contours:
+        area = float(cv2.contourArea(contour))
+        area_ratio = area / image_area
+        if not 0.03 <= area_ratio <= 0.90:
+            continue
+        rect = cv2.minAreaRect(contour)
+        box_area = float(rect[1][0] * rect[1][1])
+        rectangularity = area / box_area if box_area > 0 else 0.0
+        if rectangularity < 0.65:
+            continue
+        box = cv2.boxPoints(rect)
+        red_candidates.append({
+            "centerPixel": {"u": float(rect[0][0]), "v": float(rect[0][1])},
+            "cornersPixel": [
+                {"u": float(point[0]), "v": float(point[1])} for point in box
+            ],
+            "areaRatio": area_ratio,
+            "rectangularity": rectangularity,
+            "score": area_ratio * rectangularity,
+            "detector": "red_pcb_hsv",
+        })
+    if red_candidates:
+        return sorted(red_candidates, key=lambda item: item["score"], reverse=True)
+
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (7, 7), 0)
     edges = cv2.Canny(gray, 40, 120)
@@ -163,6 +234,7 @@ def board_candidates(image: np.ndarray) -> list[dict[str, Any]]:
             "areaRatio": area_ratio,
             "rectangularity": area / box_area,
             "score": area_ratio * (area / box_area),
+            "detector": "edge_rectangle",
         })
     return sorted(candidates, key=lambda item: item["score"], reverse=True)
 

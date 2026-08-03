@@ -17,6 +17,7 @@ yarn-error.log*
 output/
 Inputdemo/output/
 Inputdemo/outputs/
+Inputdemo/data/eye_in_hand_captures/
 MG400stimulation/MG400simulation-git-latest-ghproxy/
 **/workspace/runs/
 **/workspace/debug/
