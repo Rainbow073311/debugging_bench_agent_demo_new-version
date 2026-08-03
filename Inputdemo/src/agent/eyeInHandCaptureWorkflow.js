@@ -38,6 +38,16 @@ function requireCompleted(result, label) {
   }
 }
 
+function requireCalibratedPoseRange(pose, health, label) {
+  const min = health.validRobotXYZMin;
+  const max = health.validRobotXYZMax;
+  if (!Array.isArray(min) || !Array.isArray(max) || min.length !== 3 || max.length !== 3) return;
+  const values = [pose.x, pose.y, pose.z].map(Number);
+  if (values.some((value, index) => !Number.isFinite(value) || value < Number(min[index]) || value > Number(max[index]))) {
+    throw new Error(`${label} is outside the calibrated eye-in-hand XYZ range.`);
+  }
+}
+
 export async function executeEyeInHandCaptureWorkflow({
   run,
   input = run.input,
@@ -64,6 +74,7 @@ export async function executeEyeInHandCaptureWorkflow({
     if (!cameraController) throw new Error("Eye-in-hand camera controller is unavailable.");
 
     const health = await cameraController.health(config);
+    run.execution.camera.calibrationFile = health.calibrationFile || config.calibrationFile || null;
     if (health.calibrationStatus !== "calibrated") {
       throw new Error("Eye-in-hand extrinsics are not calibrated; no robot motion was issued.");
     }
@@ -78,9 +89,14 @@ export async function executeEyeInHandCaptureWorkflow({
     if (modeLabel(initialStatus) !== "ENABLED_IDLE") {
       throw new Error(`MG400 must be ENABLED_IDLE before camera motion; current mode is ${modeLabel(initialStatus) || "unknown"}.`);
     }
-    const initialPose = robotPose(initialStatus);
-    const fixedR = initialPose.r;
+    robotPose(initialStatus);
+    const fixedR = Number(health.fixedR ?? config.fixedR);
+    if (!Number.isFinite(fixedR)) {
+      throw new Error("Eye-in-hand motion requires a calibrated fixed camera R.");
+    }
     const globalPose = { ...config.globalPose, r: fixedR };
+    requireCalibratedPoseRange(globalPose, health, "Global camera pose");
+    requireCalibratedPoseRange({ ...globalPose, z: config.closeZ }, health, "Close camera height");
     const globalStep = motionStep("camera-global-pose", "MOVE_TO_CAMERA_GLOBAL_POSE", globalPose, config.trajectory);
     const globalMove = await armController.execute(globalStep);
     run.execution.arm.push(globalMove);
@@ -109,6 +125,7 @@ export async function executeEyeInHandCaptureWorkflow({
     onEvent("camera.pcb_coarse_localized", { localization });
 
     const closePose = { x: Number(target.x), y: Number(target.y), z: config.closeZ, r: fixedR };
+    requireCalibratedPoseRange(closePose, health, "Close camera pose");
     const closeStep = motionStep("camera-close-pose", "MOVE_TO_CAMERA_CLOSE_HOVER", closePose, config.trajectory);
     const closeMove = await armController.execute(closeStep);
     run.execution.arm.push(closeMove);

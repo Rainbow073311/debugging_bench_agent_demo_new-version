@@ -26,7 +26,7 @@ TARGETS = [
     (360.5, -25.8, 65.0),
     (345.5, -40.8, 80.0),
 ]
-SAFE_POSE = {"x": 345.5, "y": -40.8, "z": 80.0, "r": FIXED_R}
+SAFE_POSE = {"x": 345.5, "y": -40.8, "z": 50.0, "r": FIXED_R}
 
 
 def _load_bridge():
@@ -44,7 +44,7 @@ def _move(bridge, config: dict, pose: dict) -> dict:
         "pose": pose,
         "trajectory": {
             "mode": "safe-lift-traverse-descend",
-            "safeTravelZ": 90,
+            "safeTravelZ": 50,
             "travelSpeed": 15,
             "descentSpeed": 8,
         },

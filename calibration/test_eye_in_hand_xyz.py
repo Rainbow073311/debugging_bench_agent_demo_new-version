@@ -180,6 +180,48 @@ def test_pixel_projection_requires_frame_pose_and_intersects_table(tmp_path):
     np.testing.assert_allclose(center, same_center, atol=1e-8)
 
 
+def test_pose_aware_xy_correction_requires_fixed_r_and_valid_range(tmp_path):
+    config = tmp_path / "camera.yaml"
+    write_config(config, calibrated_extrinsics())
+    data = yaml.safe_load(config.read_text(encoding="utf-8"))
+    data["xy_pose_correction"] = {
+        "status": "calibrated",
+        "features": [
+            "raw_x", "raw_y", "robot_x", "robot_y", "robot_z", "constant"
+        ],
+        "coefficients": [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [2.0, -3.0],
+        ],
+        "fixed_r_deg": 7.686619,
+        "r_tolerance_deg": 0.1,
+        "valid_robot_xyz_min": [90.0, 190.0, 290.0],
+        "valid_robot_xyz_max": [110.0, 210.0, 310.0],
+    }
+    config.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    converter = PixelToWorld(config)
+
+    corrected = converter.pixel_to_table(
+        320,
+        240,
+        robot_pose={"x": 100.0, "y": 200.0, "z": 300.0, "r": 7.686619},
+    )
+    np.testing.assert_allclose(corrected, [112.0, 217.0, 0.0], atol=1e-8)
+
+    with pytest.raises(ValueError, match="robot R differs"):
+        converter.pixel_to_table(
+            320, 240, robot_pose={"x": 100, "y": 200, "z": 300, "r": 8.0}
+        )
+    with pytest.raises(ValueError, match="outside calibrated XY correction range"):
+        converter.pixel_to_table(
+            320, 240, robot_pose={"x": 120, "y": 200, "z": 300, "r": 7.686619}
+        )
+
+
 def test_legacy_fixed_camera_transform_is_rejected(tmp_path):
     config = tmp_path / "legacy.yaml"
     write_config(config, {"T_base_to_cam": {"R": np.eye(3).tolist(), "t": [0, 0, 1]}})

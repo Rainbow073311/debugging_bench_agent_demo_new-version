@@ -64,6 +64,9 @@ export class EyeInHandCameraController {
   async coarseLocalize({ config, capture }) {
     return runBridge("coarse-localize", { ...config, capture });
   }
+  async pixelToBase({ calibrationFile, pixel, robotPose }) {
+    return runBridge("pixel-to-base", { calibrationFile, pixel, robotPose });
+  }
   async captureBurst({ config, robotPose }) {
     const result = await runBridge("capture-burst", { ...config, robotPose });
     return { ...result, selectedFile: await imageFile(result.selected.path) };

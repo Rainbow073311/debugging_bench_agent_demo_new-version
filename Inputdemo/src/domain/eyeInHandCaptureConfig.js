@@ -4,7 +4,8 @@ const DEFAULTS = Object.freeze({
   burstIntervalMs: 350,
   maxPoseAgeMs: 1500,
   minSharpness: 35,
-  safeTravelZ: 60,
+  safeTravelZ: 50,
+  fixedR: 7.686619,
   travelSpeed: 20,
   descentSpeed: 8
 });
@@ -56,6 +57,7 @@ export function readEyeInHandCaptureConfig(env = process.env) {
     burstIntervalMs: Math.max(0, finiteNumber(env.EYE_IN_HAND_BURST_INTERVAL_MS, DEFAULTS.burstIntervalMs, "Burst interval")),
     maxPoseAgeMs: Math.max(1, finiteNumber(env.EYE_IN_HAND_MAX_POSE_AGE_MS, DEFAULTS.maxPoseAgeMs, "Maximum pose age")),
     minSharpness: Math.max(0, finiteNumber(env.EYE_IN_HAND_MIN_SHARPNESS, DEFAULTS.minSharpness, "Minimum sharpness")),
+    fixedR: finiteNumber(env.EYE_IN_HAND_FIXED_R_DEG, DEFAULTS.fixedR, "Fixed camera R"),
     trajectory: {
       mode: "safe-lift-traverse-descend",
       safeTravelZ: finiteNumber(env.EYE_IN_HAND_SAFE_TRAVEL_Z_MM, DEFAULTS.safeTravelZ, "Safe travel Z"),

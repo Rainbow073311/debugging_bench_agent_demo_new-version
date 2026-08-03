@@ -59,6 +59,42 @@ class PixelToWorld:
             end_camera["t_mm"],
         )
 
+        correction = data.get("xy_pose_correction", {})
+        self.xy_pose_correction = None
+        if correction.get("status") == "calibrated":
+            if correction.get("features") != [
+                "raw_x", "raw_y", "robot_x", "robot_y", "robot_z", "constant"
+            ]:
+                raise ValueError("unsupported xy_pose_correction feature schema")
+            coefficients = np.asarray(correction["coefficients"], dtype=np.float64)
+            if coefficients.shape != (6, 2) or not np.all(np.isfinite(coefficients)):
+                raise ValueError("xy_pose_correction coefficients must be finite 6x2")
+            fixed_r_deg = float(correction["fixed_r_deg"])
+            r_tolerance_deg = float(correction.get("r_tolerance_deg", 0.1))
+            xyz_min = np.asarray(correction["valid_robot_xyz_min"], dtype=np.float64)
+            xyz_max = np.asarray(correction["valid_robot_xyz_max"], dtype=np.float64)
+            if (
+                not np.isfinite(fixed_r_deg)
+                or not np.isfinite(r_tolerance_deg)
+                or r_tolerance_deg < 0
+            ):
+                raise ValueError("xy_pose_correction R guard must be finite and nonnegative")
+            if (
+                xyz_min.shape != (3,)
+                or xyz_max.shape != (3,)
+                or not np.all(np.isfinite(xyz_min))
+                or not np.all(np.isfinite(xyz_max))
+                or np.any(xyz_min > xyz_max)
+            ):
+                raise ValueError("xy_pose_correction XYZ range must be finite ordered 3-vectors")
+            self.xy_pose_correction = {
+                "coefficients": coefficients,
+                "fixed_r_deg": fixed_r_deg,
+                "r_tolerance_deg": r_tolerance_deg,
+                "valid_robot_xyz_min": xyz_min,
+                "valid_robot_xyz_max": xyz_max,
+            }
+
         table_config = data.get("table_homography", {})
         self.table_z = (
             float(table_z)
@@ -74,9 +110,13 @@ class PixelToWorld:
             self.set_robot_pose(robot_pose)
 
     def set_robot_pose(self, pose: Mapping[str, Any] | Sequence[float]):
-        """Bind the XYZ pose captured with the current image; R is ignored."""
+        """Bind frame XYZ; R is checked as a fixed-calibration safety guard."""
         xyz = robot_xyz(pose)
         self._robot_pose = {"x": xyz[0], "y": xyz[1], "z": xyz[2]}
+        if self.xy_pose_correction is not None:
+            if not isinstance(pose, Mapping) or "r" not in pose:
+                raise ValueError("robot R is required for calibrated XY correction")
+            self._robot_pose["r"] = float(pose["r"])
         return self
 
     def set_table_z(self, z):
@@ -86,12 +126,41 @@ class PixelToWorld:
     def _resolve_robot_pose(self, robot_pose):
         if robot_pose is not None:
             xyz = robot_xyz(robot_pose)
-            return {"x": xyz[0], "y": xyz[1], "z": xyz[2]}
+            resolved = {"x": xyz[0], "y": xyz[1], "z": xyz[2]}
+            if self.xy_pose_correction is not None:
+                if not isinstance(robot_pose, Mapping) or "r" not in robot_pose:
+                    raise ValueError("robot R is required for calibrated XY correction")
+                resolved["r"] = float(robot_pose["r"])
+            return resolved
         if self._robot_pose is None:
             raise ValueError(
                 "robot XYZ pose is required for every eye-in-hand image"
             )
         return self._robot_pose
+
+    def _correct_table_xy(self, raw_x, raw_y, pose):
+        correction = self.xy_pose_correction
+        if correction is None:
+            return float(raw_x), float(raw_y)
+        xyz = np.asarray([pose[key] for key in ("x", "y", "z")], dtype=np.float64)
+        if np.any(xyz < correction["valid_robot_xyz_min"]) or np.any(
+            xyz > correction["valid_robot_xyz_max"]
+        ):
+            raise ValueError("robot XYZ is outside calibrated XY correction range")
+        r_error = abs(
+            ((float(pose["r"]) - correction["fixed_r_deg"] + 180.0) % 360.0)
+            - 180.0
+        )
+        if r_error > correction["r_tolerance_deg"]:
+            raise ValueError(
+                f"robot R differs by {r_error:.3f} deg from calibrated fixed R"
+            )
+        features = np.asarray(
+            [raw_x, raw_y, pose["x"], pose["y"], pose["z"], 1.0],
+            dtype=np.float64,
+        )
+        corrected = features @ correction["coefficients"]
+        return float(corrected[0]), float(corrected[1])
 
     def base_to_camera(self, robot_pose=None):
         """Return the live ``T_base_to_camera``; robot R never participates."""
@@ -118,14 +187,16 @@ class PixelToWorld:
         if self.table_z is None:
             raise ValueError("table_z is required for ray/plane intersection")
 
-        origin, direction = self.pixel_to_world_ray(u, v, robot_pose)
+        pose = self._resolve_robot_pose(robot_pose)
+        origin, direction = self.pixel_to_world_ray(u, v, pose)
         if abs(direction[2]) < 1e-9:
             return None
         distance = (self.table_z - origin[2]) / direction[2]
         if distance <= 0:
             return None
         point = origin + direction * distance
-        return float(point[0]), float(point[1]), float(self.table_z)
+        x, y = self._correct_table_xy(point[0], point[1], pose)
+        return x, y, float(self.table_z)
 
     def world_to_pixel(self, x, y, z, robot_pose=None):
         transform = self.base_to_camera(robot_pose)

@@ -17,6 +17,7 @@ function config(overrides = {}) {
     burstIntervalMs: 0,
     maxPoseAgeMs: 1000,
     minSharpness: 20,
+    fixedR: 7.686619,
     trajectory: {
       mode: "safe-lift-traverse-descend",
       safeTravelZ: 150,
@@ -101,12 +102,40 @@ test("eye-in-hand workflow does not move when MG400 is not ENABLED_IDLE", async 
   assert.equal(run.execution.camera.status, "BLOCKED");
 });
 
+test("eye-in-hand workflow blocks an overview pose outside the calibrated XYZ range", async () => {
+  const run = createBenchRun({ command: "inspect PCB" });
+  const arm = armMock([status({ x: 345.5, y: -40.8, z: 50, r: 7.686619 })]);
+  const camera = {
+    async health() {
+      return {
+        calibrationStatus: "calibrated",
+        tablePlaneConfigured: true,
+        cameraReady: true,
+        fixedR: 7.686619,
+        validRobotXYZMin: [305.49996, -75.800005, 50],
+        validRobotXYZMax: [380.499967, -5.8, 140]
+      };
+    }
+  };
+
+  await assert.rejects(
+    executeEyeInHandCaptureWorkflow({
+      run,
+      armController: arm,
+      cameraController: camera,
+      config: config({ globalPose: { x: 400, y: -40.8, z: 120 }, closeZ: 50 })
+    }),
+    /outside the calibrated eye-in-hand XYZ range/
+  );
+  assert.equal(arm.calls.filter((call) => call.type === "execute").length, 0);
+});
+
 test("eye-in-hand workflow moves high, localizes, hovers close, and injects the sharpest of three images", async () => {
   const run = createBenchRun({ command: "inspect PCB", cameraImage: null, visualCapture: null });
   const arm = armMock([
     status({ x: 290, y: 0, z: 80, r: 27 }),
-    status({ x: 300, y: 0, z: 120, r: 91 }),
-    status({ x: 312, y: 4, z: -150, r: 180 })
+    status({ x: 300, y: 0, z: 120, r: 7.686619 }),
+    status({ x: 312, y: 4, z: -150, r: 7.686619 })
   ]);
   const selectedFile = {
     kind: "camera_image",
@@ -152,8 +181,8 @@ test("eye-in-hand workflow moves high, localizes, hovers close, and injects the 
     "MOVE_TO_CAMERA_GLOBAL_POSE",
     "MOVE_TO_CAMERA_CLOSE_HOVER"
   ]);
-  assert.equal(moves[0].step.targetPose.r, 27, "live R is held; configured R is ignored");
-  assert.deepEqual(moves[1].step.targetPose, { x: 312, y: 4, z: -150, r: 27 });
+  assert.equal(moves[0].step.targetPose.r, 7.686619, "calibrated fixed R is enforced");
+  assert.deepEqual(moves[1].step.targetPose, { x: 312, y: 4, z: -150, r: 7.686619 });
   assert.equal(moves[1].step.trajectory.mode, "safe-lift-traverse-descend");
   assert.equal(run.execution.camera.captures.length, 4);
   assert.equal(run.execution.camera.selectedImage.path, "close_2.jpg");
@@ -248,4 +277,73 @@ test("BenchAgent injects the selected close image before creating the VLM case",
   assert.equal(imageSeenByAdapter.name, "auto_close_best.jpg");
   assert.equal(run.input.visualCapture.source, "eye-in-hand");
   assert.equal(run.execution.camera.status, "COMPLETED");
+  assert.equal(executeCount, 2, "missing close-image pixel must not trigger probe motion");
+  assert.match(run.error, /did not contain a pixel/);
+});
+
+test("BenchAgent projects the VLM pixel from the selected close image and pauses before probe motion", async () => {
+  const input = { command: "inspect PCB", modelAttachments: [], cameraImage: null, visualCapture: null };
+  const poses = [
+    status({ x: 345.5, y: -40.8, z: 50, r: 7.686619 }),
+    status({ x: 345.5, y: -40.8, z: 120, r: 7.686619 }),
+    status({ x: 340, y: -35, z: 50, r: 7.686619 })
+  ];
+  let executeCount = 0;
+  const arm = {
+    async runCommand() { return poses.shift(); },
+    async execute(step) {
+      executeCount += 1;
+      return { status: "COMPLETED", stepId: step.id, executedPose: step.targetPose };
+    }
+  };
+  const selectedFile = {
+    kind: "camera_image", name: "close_best.jpg", type: "image/jpeg",
+    size: 10, dataUrl: "data:image/jpeg;base64,YQ=="
+  };
+  const camera = {
+    async health() {
+      return { calibrationStatus: "calibrated", tablePlaneConfigured: true, cameraReady: true, calibrationFile: "camera.yaml" };
+    },
+    async capture({ robotPose }) { return { path: "global.jpg", robotPose, sharpness: 40 }; },
+    async coarseLocalize() {
+      return { status: "UNIQUE", candidateCount: 1, recommendedEndXY: { x: 340, y: -35 } };
+    },
+    async captureBurst({ robotPose }) {
+      const captures = [30, 55, 41].map((sharpness, index) => ({
+        path: `close_${index + 1}.jpg`, sharpness, robotPose
+      }));
+      return { captures, selected: captures[1], selectedFile };
+    },
+    async pixelToBase({ pixel, robotPose }) {
+      assert.deepEqual(pixel, { x: 1200, y: 900 });
+      assert.equal(robotPose.z, 50);
+      return { basePoint: { x: 321.25, y: -22.5, z: -149.48003 } };
+    }
+  };
+  const agent = new BenchAgent({
+    vlmClient: {
+      async analyzeBench() {
+        return {
+          pixel: { x: 1200, y: 900 },
+          locations: [{ id: "TP1", pixel: { x: 1200, y: 900 } }],
+          recommendedMeasurements: [{ locationId: "TP1", instrument: "oscilloscope" }]
+        };
+      }
+    },
+    largeModelClient: {
+      async generateMg400Pose() {
+        return { pixel: { x: 1200, y: 900 }, mg400Pose: { x: 1200, y: 900, z: 0, r: 0 } };
+      }
+    },
+    ragRepository: {}, armController: arm, equipmentController: {},
+    reportGenerator: { create() { return {}; } },
+    eyeInHandCameraController: camera,
+    eyeInHandCaptureConfig: config({ globalPose: { x: 345.5, y: -40.8, z: 120 }, closeZ: 50 })
+  });
+
+  const run = await agent.run(input);
+  assert.equal(executeCount, 2, "only overview and close-camera moves are allowed");
+  assert.equal(run.modelOutput.mg400Pose, null);
+  assert.deepEqual(run.modelOutput.calibratedBasePoint, { x: 321.25, y: -22.5, z: -149.48003 });
+  assert.match(run.timeline.at(-1).message, /hover validation/);
 });

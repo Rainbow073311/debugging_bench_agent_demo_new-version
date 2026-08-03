@@ -1,6 +1,6 @@
 calibration:
   date: '2026-08-03T11:21:02.642907+08:00'
-  status: active_intrinsics_extrinsics_pending
+  status: calibrated
   camera_model: Basler acA2440-75uc
   serial: '24771618'
   resolution:
@@ -234,3 +234,32 @@ table_homography:
   table_z_mm: -149.48003
   source: eye_in_hand_target_plane_in_robot_base
   note: Only the base-frame plane Z is used; no fixed-camera H is reused.
+xy_pose_correction:
+  status: calibrated
+  method: linear residual correction after eye-in-hand ray-plane projection
+  features: [raw_x, raw_y, robot_x, robot_y, robot_z, constant]
+  coefficients:
+  - [0.9945227974211728, -0.011006568821075742]
+  - [0.005361564650144127, 0.9907257974322147]
+  - [-0.005438031260998146, 0.0076732038113127565]
+  - [0.01558543295100499, -0.03692065028856541]
+  - [0.05000537580142056, 0.02488114415936654]
+  - [3.261004964732347, -1.8791347234498665]
+  fixed_r_deg: 7.686619
+  r_tolerance_deg: 0.1
+  valid_robot_xyz_min: [305.49996, -75.800005, 50.0]
+  valid_robot_xyz_max: [380.499967, -5.8, 140.0]
+  training:
+    session: calibration_sessions/basler_extrinsics_xyz_20260803_113635
+    frames_total: 13
+    frames_train: 10
+    chessboard_points_total: 540
+    inliers_used: 499
+  independent_holdout:
+    frames: 3
+    mean_error_mm: 0.9307
+    median_error_mm: 0.9096
+    max_error_mm: 1.3954
+runtime_safety:
+  safe_height_z_mm: 50.0
+  fixed_r_deg: 7.686619

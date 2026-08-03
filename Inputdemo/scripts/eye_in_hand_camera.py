@@ -194,7 +194,10 @@ def coarse_localize(payload: dict[str, Any]) -> dict[str, Any]:
 
     close_z = float(payload["closeZ"])
     hypothetical_close_pose = {
-        "x": float(robot_pose["x"]), "y": float(robot_pose["y"]), "z": close_z
+        "x": float(robot_pose["x"]),
+        "y": float(robot_pose["y"]),
+        "z": close_z,
+        "r": float(robot_pose["r"]),
     }
     principal = (float(mapper.K[0, 2]), float(mapper.K[1, 2]))
     close_view_center = mapper.pixel_to_table(
@@ -218,11 +221,34 @@ def coarse_localize(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def pixel_to_base(payload: dict[str, Any]) -> dict[str, Any]:
+    pixel = payload.get("pixel") or {}
+    if isinstance(pixel, (list, tuple)) and len(pixel) == 2:
+        u, v = float(pixel[0]), float(pixel[1])
+    else:
+        u, v = float(pixel["x"]), float(pixel["y"])
+    if not np.isfinite([u, v]).all():
+        raise ValueError("pixel x/y must be finite.")
+    robot_pose = require_pose(payload)
+    mapper = PixelToWorld(str(calibration_path(payload)), robot_pose=robot_pose)
+    point = mapper.pixel_to_table(u, v)
+    if point is None:
+        raise RuntimeError("Selected close-image pixel does not intersect the calibrated PCB plane.")
+    return {
+        "ok": True,
+        "pixel": {"x": u, "y": v},
+        "robotPose": robot_pose,
+        "basePoint": {"x": point[0], "y": point[1], "z": point[2]},
+    }
+
+
 def health(payload: dict[str, Any]) -> dict[str, Any]:
     path = calibration_path(payload)
     status = calibration_status(payload)
     data = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
     table_plane_configured = "table_z_mm" in (data or {}).get("table_homography", {})
+    correction = (data or {}).get("xy_pose_correction", {})
+    runtime_safety = (data or {}).get("runtime_safety", {})
     camera_ready = False
     if status == "calibrated" and table_plane_configured:
         camera = open_camera(payload)
@@ -243,6 +269,11 @@ def health(payload: dict[str, Any]) -> dict[str, Any]:
         "mountMode": "eye_in_hand_xyz",
         "robotAxesUsed": ["x", "y", "z"],
         "robotAxesIgnored": ["r"],
+        "fixedR": correction.get("fixed_r_deg", runtime_safety.get("fixed_r_deg")),
+        "rToleranceDeg": correction.get("r_tolerance_deg"),
+        "validRobotXYZMin": correction.get("valid_robot_xyz_min"),
+        "validRobotXYZMax": correction.get("valid_robot_xyz_max"),
+        "safeHeightZ": runtime_safety.get("safe_height_z_mm"),
     }
 
 
@@ -254,6 +285,7 @@ def main() -> int:
         "capture": capture_one,
         "capture-burst": capture_burst,
         "coarse-localize": coarse_localize,
+        "pixel-to-base": pixel_to_base,
     }
     if action not in actions:
         raise ValueError(f"Unsupported camera action: {action}")

@@ -3,8 +3,9 @@
 ## Scope
 
 The camera is treated as an eye-in-hand sensor whose position follows MG400
-`X`, `Y`, and `Z`. Robot `R` is explicitly ignored and must not change the
-computed camera pose.
+`X`, `Y`, and `Z`. Robot `R` is not an input feature of the camera transform,
+but the physical arm must remain at the calibrated fixed value `7.686619`
+degrees. Runtime projection is rejected when R differs by more than 0.1 degree.
 
 For every captured frame:
 
@@ -106,8 +107,8 @@ For the current Basler installation, `capture_basler_extrinsics_sample.py`
 requires `ENABLED_IDLE`, verifies that XYZ/R remain stable during exposure,
 rejects incomplete 9x6 detections and rejects PnP reprojection RMSE above
 1.5 px. `run_basler_extrinsics_sequence.py` fixes R at `7.686619` degrees,
-resumes from the existing sample count, uses a Z=90 mm travel height, and
-returns to the Z=80 mm safe pose on exit. Independent frames are collected by
+resumes from the existing sample count, uses a Z=50 mm travel height, and
+returns to the Z=50 mm safe pose on exit. Independent frames are collected by
 `run_basler_extrinsics_validation_sequence.py` into `validation_samples.json`;
 they are never included in the fitted transform.
 
@@ -121,7 +122,10 @@ writing a transform.
 ## Runtime requirements
 
 - Bind the MG400 XYZ pose read for the selected frame.
+- Hold robot R at `7.686619` degrees for every overview and close frame.
 - Reject missing/stale pose data.
+- Reject projection outside robot X `305.49996..380.499967`, Y
+  `-75.800005..-5.8`, or Z `50..140` mm.
 - Keep camera resolution, lens and focus consistent with intrinsic calibration.
 - Use the configured table/PCB plane for ray-plane intersection.
 - Validate projected known points before allowing hover-only motion.
@@ -144,6 +148,14 @@ workflow:
 7. select the frame with the largest Laplacian sharpness score;
 8. store all image timestamps, sharpness values and robot poses, then inject the
    selected image as `front_board_photo` before the VLM case is created.
+9. project the VLM-selected pixel from that close image into Base XY using the
+   close image's synchronized robot XYZ; pause automatic contact motion until
+   the calibrated XY has passed an independent hover validation.
+
+The overview image therefore chooses the close-camera area. The selected close
+image determines the final PCB test-point XY. The visual path never supplies
+the contact Z; contact Z remains the responsibility of the voltage-latched
+probe descent.
 
 The workflow is off by default. Real use requires both gates and explicit
 installation-specific poses:
@@ -151,8 +163,8 @@ installation-specific poses:
 ```powershell
 $env:ENABLE_EYE_IN_HAND_CAPTURE = "true"
 $env:ENABLE_EYE_IN_HAND_MOTION = "true"
-$env:EYE_IN_HAND_GLOBAL_POSE_JSON = '{"x":300,"y":0,"z":120}'
-$env:EYE_IN_HAND_CLOSE_Z_MM = "-150"
+$env:EYE_IN_HAND_GLOBAL_POSE_JSON = '{"x":345.5,"y":-40.8,"z":120}'
+$env:EYE_IN_HAND_CLOSE_Z_MM = "50"
 ```
 
 Those numeric examples are schema examples, not validated poses for the real
@@ -163,6 +175,8 @@ settings include `EYE_IN_HAND_CAMERA_INDEX`, `EYE_IN_HAND_SETTLE_MS`,
 
 Motion is blocked before the first command when calibration is not
 `calibrated`, and close motion is blocked for zero or multiple PCB candidates.
-Robot R is held at its live value for the physical move but never participates
-in camera geometry. The later probe routine remains separate: its fixed start,
+Robot R is commanded to the calibrated fixed value for the physical move but
+never participates as a fitted geometry feature. After ray-plane projection,
+a pose-aware XY residual correction uses the image's robot XYZ. Its independent
+three-frame holdout error is 0.93 mm mean and 1.40 mm maximum. The later probe routine remains separate: its fixed start,
 0.1 mm steps, first 3 V latch, and minimum-Z stop are unchanged.

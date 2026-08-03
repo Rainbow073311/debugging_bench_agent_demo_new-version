@@ -3,8 +3,9 @@
 ## Scope
 
 The camera is treated as an eye-in-hand sensor whose position follows MG400
-`X`, `Y`, and `Z`. Robot `R` is explicitly ignored and must not change the
-computed camera pose.
+`X`, `Y`, and `Z`. Robot `R` is not an input feature of the camera transform,
+but the physical arm must remain at the calibrated fixed value `7.686619`
+degrees. Runtime projection is rejected when R differs by more than 0.1 degree.
 
 For every captured frame:
 
@@ -139,6 +140,6 @@ settings include `EYE_IN_HAND_CAMERA_INDEX`, `EYE_IN_HAND_SETTLE_MS`,
 
 Motion is blocked before the first command when calibration is not
 `calibrated`, and close motion is blocked for zero or multiple PCB candidates.
-Robot R is held at its live value for the physical move but never participates
-in camera geometry. The later probe routine remains separate: its fixed start,
+Robot R is commanded to the calibrated fixed value for the physical move but
+never participates as a fitted geometry feature. The later probe routine remains separate: its fixed start,
 0.1 mm steps, first 3 V latch, and minimum-Z stop are unchanged.

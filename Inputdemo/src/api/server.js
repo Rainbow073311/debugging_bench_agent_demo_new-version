@@ -26,6 +26,7 @@ import {
 import { executeProbeSignalSearch } from "../agent/probeSignalSearch.js";
 import { executeEyeInHandCaptureWorkflow } from "../agent/eyeInHandCaptureWorkflow.js";
 import { EyeInHandCameraController } from "../adapters/eyeInHandCameraController.js";
+import { projectEyeInHandVlmPixel } from "../agent/calibratedVisionTarget.js";
 
 const port = Number(process.env.PORT || 3000);
 
@@ -340,6 +341,70 @@ async function finalizeSplitServiceRun(parentRunId) {
   if (allPoints.length === 0) {
     transition(run, AgentState.REPORTING, "Split VLM completed but no child runs succeeded.");
     appendRunEvent(parentRunId, "node.failed", { error: "No successful child runs", points: allPoints });
+    return;
+  }
+
+  if (run.execution.camera?.status === "COMPLETED") {
+    for (const point of allPoints) {
+      const projection = await projectEyeInHandVlmPixel({
+        cameraExecution: run.execution.camera,
+        cameraController: serviceCameraController,
+        pixel: point.pixel
+      });
+      point.basePoint = projection?.basePoint || null;
+    }
+    const projectedPoint = allPoints.find((point) => point.basePoint);
+    if (projectedPoint) {
+      const projectedAnswer = { ...projectedPoint.final_answer, tp_id: projectedPoint.id };
+      run.vlmObservation = buildVlmObservation({
+        input: run.input,
+        service: completed,
+        finalAnswer: projectedAnswer,
+        pixel: projectedPoint.pixel,
+        points: allPoints
+      });
+      if (run.vlmObservation.locations?.[0]) {
+        run.vlmObservation.locations[0].basePoint = projectedPoint.basePoint;
+      }
+      run.modelOutput = buildModelOutput({
+        service: completed,
+        finalAnswer: projectedAnswer,
+        pixel: projectedPoint.pixel,
+        pointId: projectedPoint.id,
+        basePoint: projectedPoint.basePoint
+      });
+      transition(run, AgentState.REPORTING,
+        "Calibrated close-image Base XY is ready; automatic probe motion is paused pending hover validation."
+      );
+      run.report = serviceReportGenerator.create({
+        run,
+        ragEvidence: run.ragEvidence || [],
+        vlmObservation: run.vlmObservation,
+        measurements: run.execution.equipment
+      });
+      appendRunEvent(parentRunId, "camera.calibrated_target_ready", {
+        point: projectedPoint,
+        automaticProbePaused: true
+      });
+      vlmStatus.handleEvent(parentRunId, "node.completed", {
+        runId: parentRunId,
+        calibratedBasePoint: projectedPoint.basePoint,
+        automaticProbePaused: true
+      });
+      updateRun(parentRunId, run);
+      return;
+    }
+    run.error = "The close-image VLM result did not contain a pixel that could be projected to calibrated Base XY.";
+    transition(run, AgentState.REPORTING, `${run.error} No probe motion was issued.`);
+    run.report = serviceReportGenerator.create({
+      run,
+      ragEvidence: run.ragEvidence || [],
+      vlmObservation: run.vlmObservation,
+      measurements: run.execution.equipment
+    });
+    appendRunEvent(parentRunId, "node.failed", { error: run.error, automaticProbePaused: true });
+    vlmStatus.markRunFailed(parentRunId, new Error(run.error));
+    updateRun(parentRunId, run);
     return;
   }
 
@@ -673,9 +738,11 @@ function buildVlmObservation({ input, service, finalAnswer, pixel }) {
   };
 }
 
-function buildModelOutput({ service, finalAnswer, pixel, pointId = null }) {
-  const pose = normalizePose(finalAnswer?.mg400Pose || finalAnswer?.mg400_pose || finalAnswer?.pose)
-    || poseFromPixel(pixel || finalAnswer?.pixel, pointId);
+function buildModelOutput({ service, finalAnswer, pixel, pointId = null, basePoint = null }) {
+  const pose = basePoint
+    ? null
+    : normalizePose(finalAnswer?.mg400Pose || finalAnswer?.mg400_pose || finalAnswer?.pose)
+      || poseFromPixel(pixel || finalAnswer?.pixel, pointId);
   return {
     model: process.env.VLM_MODEL || "vlm-agent-service",
     provider: "debugging-agent-v2-service",
@@ -685,11 +752,14 @@ function buildModelOutput({ service, finalAnswer, pixel, pointId = null }) {
     confidence: Number.isFinite(Number(finalAnswer?.confidence)) ? Number(finalAnswer.confidence) : null,
     pixel: pixel ? { x: pixel[0], y: pixel[1] } : null,
     mg400Pose: pose,
+    calibratedBasePoint: basePoint,
     finalAnswer,
     summaryPath: service.summary_path,
     runDir: service.run_dir,
     workspace: service.run_dir ? service.run_dir.replace(/\\runs\\.*$/, "") : null,
-    reason: pose
+    reason: basePoint
+      ? "Close-image pixel was projected to calibrated Base XY; contact motion remains paused for hover validation."
+      : pose
       ? "VLM service returned localization output; pose was returned or derived from pixel."
       : "VLM service returned localization output."
   };

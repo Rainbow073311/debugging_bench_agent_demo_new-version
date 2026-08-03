@@ -11,6 +11,7 @@ import {
   retractProbeToStart
 } from "./probeSignalSearch.js";
 import { executeEyeInHandCaptureWorkflow } from "./eyeInHandCaptureWorkflow.js";
+import { projectEyeInHandVlmPixel } from "./calibratedVisionTarget.js";
 
 export class BenchAgent {
   constructor({ vlmClient, largeModelClient, ragRepository, armController, equipmentController, reportGenerator, vlmAgentCaseAdapter = null, eyeInHandCameraController = null, eyeInHandCaptureConfig = undefined }) {
@@ -51,10 +52,47 @@ export class BenchAgent {
       })
     ]);
 
+    const calibratedTarget = await projectEyeInHandVlmPixel({
+      cameraExecution: run.execution.camera,
+      cameraController: this.eyeInHandCameraController,
+      pixel: modelOutput?.pixel || vlmObservation?.pixel
+    });
+    if (calibratedTarget) {
+      modelOutput.calibratedBasePoint = calibratedTarget.basePoint;
+      modelOutput.mg400Pose = null;
+      modelOutput.reason = "Close-image pixel was projected to calibrated Base XY; contact motion remains paused for hover validation.";
+      const firstLocation = vlmObservation?.locations?.[0];
+      if (firstLocation) firstLocation.basePoint = calibratedTarget.basePoint;
+    } else if (run.execution.camera?.status === "COMPLETED") {
+      modelOutput.mg400Pose = null;
+    }
+
     run.ragEvidence = ragEvidence;
     run.vlmObservation = vlmObservation;
     run.modelOutput = modelOutput;
     run.plan = mapVlmTargetToExecution({ input, ragEvidence, vlmObservation, modelOutput });
+
+    if (calibratedTarget) {
+      transition(run, AgentState.REPORTING, "Calibrated close-image Base XY is ready; automatic probe motion is paused pending hover validation.");
+      run.report = this.reportGenerator.create({
+        run,
+        ragEvidence,
+        vlmObservation,
+        measurements: run.execution.equipment
+      });
+      return run;
+    }
+    if (run.execution.camera?.status === "COMPLETED") {
+      run.error = "The close-image VLM result did not contain a pixel that could be projected to calibrated Base XY.";
+      transition(run, AgentState.REPORTING, `${run.error} No probe motion was issued.`);
+      run.report = this.reportGenerator.create({
+        run,
+        ragEvidence,
+        vlmObservation,
+        measurements: run.execution.equipment
+      });
+      return run;
+    }
 
     transition(run, AgentState.EXECUTING, "VLM target execution mapping created; executing hardware flow.");
     const readyMove = await executeVlmCompletionReadyMove(this.armController);
