@@ -35,6 +35,10 @@ pytest_tmp_*/
 tmp/
 *.py[cod]
 
+# Local camera-calibration captures and recoverable config backups
+calibration/calibration_sessions/
+calibration/archive/
+
 # Local editor and OS files
 .vscode/
 .idea/
