@@ -5,6 +5,8 @@ const DEFAULTS = Object.freeze({
   maxPoseAgeMs: 1500,
   minSharpness: 35,
   globalZ: 50,
+  closeX: 360.737183,
+  closeY: -14.016606,
   closeZ: -43.59,
   safeTravelZ: 50,
   stagingRadius: 300,
@@ -54,11 +56,16 @@ export function readEyeInHandCaptureConfig(env = process.env) {
     DEFAULTS.closeZ,
     "Close capture Z"
   );
+  const fixedCloseXY = {
+    x: finiteNumber(env.EYE_IN_HAND_CLOSE_X_MM, DEFAULTS.closeX, "Close capture X"),
+    y: finiteNumber(env.EYE_IN_HAND_CLOSE_Y_MM, DEFAULTS.closeY, "Close capture Y")
+  };
 
   return {
     captureEnabled,
     motionEnabled,
     globalPose,
+    fixedCloseXY,
     closeZ,
     cameraIndex: Math.round(finiteNumber(env.EYE_IN_HAND_CAMERA_INDEX, 0, "Camera index")),
     outputDir: env.EYE_IN_HAND_CAPTURE_DIR || null,

@@ -12,6 +12,7 @@ function config(overrides = {}) {
     captureEnabled: true,
     motionEnabled: true,
     globalPose: { x: 300, y: 0, z: 120, r: 999 },
+    fixedCloseXY: { x: 360.737183, y: -14.016606 },
     closeZ: -150,
     settleMs: 0,
     burstCount: 3,
@@ -58,6 +59,7 @@ test("eye-in-hand height defaults use the requested Z=50 safe-travel profile", (
     EYE_IN_HAND_GLOBAL_POSE_JSON: '{"x":345.5,"y":-40.8,"z":999}'
   });
   assert.deepEqual(result.globalPose, { x: 345.5, y: -40.8, z: 50 });
+  assert.deepEqual(result.fixedCloseXY, { x: 360.737183, y: -14.016606 });
   assert.equal(result.closeZ, -43.59);
   assert.equal(result.trajectory.safeTravelZ, 50);
   assert.equal(result.trajectory.stagingRadius, 300);
@@ -145,10 +147,10 @@ test("eye-in-hand workflow moves high, localizes, hovers close, and injects the 
   const run = createBenchRun({ command: "inspect PCB", cameraImage: null, visualCapture: null });
   const arm = armMock([
     status({ x: 290, y: 0, z: 80, r: 27 }),
-    status({ x: 300, y: 0, z: 120, r: 7.686619 }),
-    status({ x: 300, y: 0, z: 120, r: 7.686619 }),
-    status({ x: 312, y: 4, z: -150, r: 7.686619 }),
-    status({ x: 312, y: 4, z: -150, r: 7.686619 })
+    status({ x: 350, y: -20, z: 120, r: 7.686619 }),
+    status({ x: 350, y: -20, z: 120, r: 7.686619 }),
+    status({ x: 360.737183, y: -14.016606, z: -150, r: 7.686619 }),
+    status({ x: 360.737183, y: -14.016606, z: -150, r: 7.686619 })
   ]);
   const selectedFile = {
     kind: "camera_image",
@@ -158,7 +160,15 @@ test("eye-in-hand workflow moves high, localizes, hovers close, and injects the 
     dataUrl: "data:image/jpeg;base64,YQ=="
   };
   const camera = {
-    async health() { return { calibrationStatus: "calibrated", tablePlaneConfigured: true, cameraReady: true }; },
+    async health() {
+      return {
+        calibrationStatus: "calibrated",
+        tablePlaneConfigured: true,
+        cameraReady: true,
+        validRobotXYZMin: [339, -31, -151],
+        validRobotXYZMax: [383, 19, 130]
+      };
+    },
     async capture({ robotPose }) {
       return { path: "global.jpg", robotPose, sharpness: 40 };
     },
@@ -182,7 +192,7 @@ test("eye-in-hand workflow moves high, localizes, hovers close, and injects the 
     run,
     armController: arm,
     cameraController: camera,
-    config: config(),
+    config: config({ globalPose: { x: 350, y: -20, z: 120 } }),
     sleep: async () => {},
     now: () => 100,
     onEvent: (type) => events.push(type)
@@ -195,7 +205,9 @@ test("eye-in-hand workflow moves high, localizes, hovers close, and injects the 
     "MOVE_TO_CAMERA_CLOSE_HOVER"
   ]);
   assert.equal(moves[0].step.targetPose.r, 7.686619, "calibrated fixed R is enforced");
-  assert.deepEqual(moves[1].step.targetPose, { x: 312, y: 4, z: -150, r: 7.686619 });
+  assert.deepEqual(moves[1].step.targetPose, {
+    x: 360.737183, y: -14.016606, z: -150, r: 7.686619
+  });
   assert.equal(moves[1].step.trajectory.mode, "safe-lift-traverse-descend");
   assert.equal(run.execution.camera.captures.length, 4);
   assert.equal(run.execution.camera.selectedImage.path, "close_2.jpg");

@@ -77,8 +77,8 @@ export async function executeEyeInHandCaptureWorkflow({
     if (!config.motionEnabled) {
       throw new Error("Eye-in-hand capture is enabled, but ENABLE_EYE_IN_HAND_MOTION is not true.");
     }
-    if (!config.globalPose || !Number.isFinite(config.closeZ)) {
-      throw new Error("Eye-in-hand motion requires EYE_IN_HAND_GLOBAL_POSE_JSON and EYE_IN_HAND_CLOSE_Z_MM.");
+    if (!config.globalPose || !config.fixedCloseXY || !Number.isFinite(config.closeZ)) {
+      throw new Error("Eye-in-hand motion requires a global pose and fixed close X/Y/Z.");
     }
     if (!cameraController) throw new Error("Eye-in-hand camera controller is unavailable.");
 
@@ -104,8 +104,14 @@ export async function executeEyeInHandCaptureWorkflow({
       throw new Error("Eye-in-hand motion requires a calibrated fixed camera R.");
     }
     const globalPose = { ...config.globalPose, r: fixedR };
+    const closePose = {
+      x: Number(config.fixedCloseXY.x),
+      y: Number(config.fixedCloseXY.y),
+      z: config.closeZ,
+      r: fixedR
+    };
     requireCalibratedPoseRange(globalPose, health, "Global camera pose");
-    requireCalibratedPoseRange({ ...globalPose, z: config.closeZ }, health, "Close camera height");
+    requireCalibratedPoseRange(closePose, health, "Fixed close camera pose");
     const globalStep = motionStep("camera-global-pose", "MOVE_TO_CAMERA_GLOBAL_POSE", globalPose, config.trajectory);
     const globalMove = await armController.execute(globalStep);
     run.execution.arm.push(globalMove);
@@ -127,15 +133,10 @@ export async function executeEyeInHandCaptureWorkflow({
     if (localization.status !== "UNIQUE" || localization.candidateCount !== 1) {
       throw new Error(`PCB coarse localization is not unique (${localization.candidateCount ?? 0} candidates).`);
     }
-    const target = localization.recommendedEndXY;
-    if (!target || !Number.isFinite(Number(target.x)) || !Number.isFinite(Number(target.y))) {
-      throw new Error("PCB coarse localization did not return a calibrated close-pose end X/Y.");
-    }
     run.execution.camera.localization = localization;
-    onEvent("camera.pcb_coarse_localized", { localization });
+    run.execution.camera.fixedClosePose = closePose;
+    onEvent("camera.pcb_coarse_localized", { localization, fixedClosePose: closePose });
 
-    const closePose = { x: Number(target.x), y: Number(target.y), z: config.closeZ, r: fixedR };
-    requireCalibratedPoseRange(closePose, health, "Close camera pose");
     const closeStep = motionStep("camera-close-pose", "MOVE_TO_CAMERA_CLOSE_HOVER", closePose, config.trajectory);
     const closeMove = await armController.execute(closeStep);
     run.execution.arm.push(closeMove);
