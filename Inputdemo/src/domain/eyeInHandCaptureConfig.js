@@ -6,7 +6,8 @@ const DEFAULTS = Object.freeze({
   minSharpness: 35,
   globalZ: 50,
   closeZ: -43.59,
-  safeTravelZ: -43.59,
+  safeTravelZ: 50,
+  stagingRadius: 300,
   fixedR: 7.686619,
   travelSpeed: 20,
   descentSpeed: 8
@@ -71,6 +72,7 @@ export function readEyeInHandCaptureConfig(env = process.env) {
     trajectory: {
       mode: "safe-lift-traverse-descend",
       safeTravelZ: finiteNumber(env.EYE_IN_HAND_SAFE_TRAVEL_Z_MM, DEFAULTS.safeTravelZ, "Safe travel Z"),
+      stagingRadius: finiteNumber(env.EYE_IN_HAND_STAGING_RADIUS_MM, DEFAULTS.stagingRadius, "Staging radius"),
       travelSpeed: finiteNumber(env.EYE_IN_HAND_TRAVEL_SPEED, DEFAULTS.travelSpeed, "Travel speed"),
       descentSpeed: finiteNumber(env.EYE_IN_HAND_DESCENT_SPEED, DEFAULTS.descentSpeed, "Descent speed")
     }

@@ -63,20 +63,42 @@ export function createMg400SafeTrajectory(currentPose, targetPose, options = {})
   }
   const travelSpeed = boundedSpeed(options.travelSpeed, 30, "Travel speed");
   const descentSpeed = boundedSpeed(options.descentSpeed, 10, "Descent speed");
-  const travelZ = Math.max(start.z, safeTravelZ);
+  const travelZ = Math.max(start.z, target.z, safeTravelZ);
+  const stagingRadius = options.stagingRadius === undefined
+    ? null
+    : Number(options.stagingRadius);
+  if (stagingRadius !== null && (!Number.isFinite(stagingRadius) || stagingRadius <= 0)) {
+    throw new Error("Staging radius must be a positive finite number.");
+  }
 
-  const liftPose = { ...start, z: travelZ };
-  const traversePose = {
-    x: target.x,
-    y: target.y,
-    z: travelZ,
-    r: target.r
+  const radialPose = (source, z, r) => {
+    const theta = Math.atan2(source.y, source.x);
+    return {
+      x: stagingRadius * Math.cos(theta),
+      y: stagingRadius * Math.sin(theta),
+      z,
+      r
+    };
   };
-  const candidates = [
-    { name: "lift", targetPose: liftPose, speed: travelSpeed },
-    { name: "traverse", targetPose: traversePose, speed: travelSpeed },
-    { name: "descend", targetPose: target, speed: descentSpeed }
-  ];
+  const candidates = stagingRadius === null
+    ? [
+        { name: "lift", targetPose: { ...start, z: travelZ }, speed: travelSpeed },
+        { name: "traverse", targetPose: { x: target.x, y: target.y, z: travelZ, r: target.r }, speed: travelSpeed },
+        { name: "descend", targetPose: target, speed: descentSpeed }
+      ]
+    : (() => {
+        const stagingStart = radialPose(start, start.z, start.r);
+        const stagingStartHigh = { ...stagingStart, z: travelZ };
+        const stagingTargetHigh = radialPose(target, travelZ, target.r);
+        const stagingTarget = { ...stagingTargetHigh, z: target.z };
+        return [
+          { name: "retract_to_staging", targetPose: stagingStart, speed: travelSpeed },
+          { name: "lift_staging", targetPose: stagingStartHigh, speed: travelSpeed },
+          { name: "traverse_staging", targetPose: stagingTargetHigh, speed: travelSpeed },
+          { name: "descend_staging", targetPose: stagingTarget, speed: descentSpeed },
+          { name: "extend_from_staging", targetPose: target, speed: descentSpeed }
+        ];
+      })();
 
   const stages = [];
   let segmentStart = start;
@@ -93,6 +115,7 @@ export function createMg400SafeTrajectory(currentPose, targetPose, options = {})
     travelZ,
     travelSpeed,
     descentSpeed,
+    stagingRadius,
     startPose: start,
     targetPose: target,
     stages

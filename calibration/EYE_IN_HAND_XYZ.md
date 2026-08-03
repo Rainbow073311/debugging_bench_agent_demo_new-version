@@ -163,26 +163,28 @@ installation-specific poses:
 ```powershell
 $env:ENABLE_EYE_IN_HAND_CAPTURE = "true"
 $env:ENABLE_EYE_IN_HAND_MOTION = "true"
-$env:EYE_IN_HAND_GLOBAL_POSE_JSON = '{"x":345.5,"y":-40.8}'
+$env:EYE_IN_HAND_GLOBAL_POSE_JSON = '{"x":350,"y":-20.9156}'
 $env:EYE_IN_HAND_GLOBAL_Z_MM = "50"
 $env:EYE_IN_HAND_CLOSE_Z_MM = "-43.59"
-$env:EYE_IN_HAND_SAFE_TRAVEL_Z_MM = "-43.59"
+$env:EYE_IN_HAND_SAFE_TRAVEL_Z_MM = "50"
 ```
 
-Those numeric examples are schema examples, not validated poses for the real
-installation. Set them only after reachability and clearance review. Optional
+The global pose above was included in the 5 mm-board calibration set. Recheck
+clearance whenever the fixture or camera mount changes. Optional
 settings include `EYE_IN_HAND_CAMERA_INDEX`, `EYE_IN_HAND_SETTLE_MS`,
 `EYE_IN_HAND_MIN_SHARPNESS`, `EYE_IN_HAND_CAPTURE_DIR`, and
-`EYE_IN_HAND_CALIBRATION_FILE`.
+`EYE_IN_HAND_CALIBRATION_FILE`. `EYE_IN_HAND_STAGING_RADIUS_MM` defaults to
+`300` for the validated inner-radius height transition.
 
-The requested close and travel height `-43.59 mm` is outside the currently
-calibrated robot-Z interval `50..140 mm`. Runtime range checks therefore block
-the first motion command until calibration data covering `-43.59 mm` is added.
+The active 5 mm-board session covers close capture at `Z=-43.59 mm`, an
+intermediate layer at `Z=25 mm`, and global capture at `Z=50 mm`. Horizontal
+travel uses `Z=50 mm`; the narrow workspace near `Z=10 mm` is crossed only at
+an inner-radius staging pose by the calibration collection scripts.
 
 Motion is blocked before the first command when calibration is not
 `calibrated`, and close motion is blocked for zero or multiple PCB candidates.
 Robot R is commanded to the calibrated fixed value for the physical move but
 never participates as a fitted geometry feature. After ray-plane projection,
 a pose-aware XY residual correction uses the image's robot XYZ. Its independent
-three-frame holdout error is 0.93 mm mean and 1.40 mm maximum. The later probe routine remains separate: its fixed start,
+three-frame holdout error is 0.63 mm mean and 1.71 mm maximum. The later probe routine remains separate: its fixed start,
 0.1 mm steps, first 3 V latch, and minimum-Z stop are unchanged.

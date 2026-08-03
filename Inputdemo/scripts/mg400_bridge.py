@@ -274,19 +274,46 @@ def build_safe_trajectory(current_pose, target_pose, options):
     safe_travel_z = float(options.get("safeTravelZ", 100))
     travel_speed = bounded_speed(options.get("travelSpeed"), 30, "Travel speed")
     descent_speed = bounded_speed(options.get("descentSpeed"), 10, "Descent speed")
-    travel_z = max(start["z"], safe_travel_z)
-    lift = {**start, "z": travel_z}
-    traverse = {
-        "x": target["x"],
-        "y": target["y"],
-        "z": travel_z,
-        "r": target["r"],
-    }
-    candidates = [
-        ("lift", lift, travel_speed),
-        ("traverse", traverse, travel_speed),
-        ("descend", target, descent_speed),
-    ]
+    travel_z = max(start["z"], target["z"], safe_travel_z)
+    staging_radius = options.get("stagingRadius")
+    if staging_radius is None:
+        lift = {**start, "z": travel_z}
+        traverse = {
+            "x": target["x"],
+            "y": target["y"],
+            "z": travel_z,
+            "r": target["r"],
+        }
+        candidates = [
+            ("lift", lift, travel_speed),
+            ("traverse", traverse, travel_speed),
+            ("descend", target, descent_speed),
+        ]
+    else:
+        staging_radius = float(staging_radius)
+        if not math.isfinite(staging_radius) or staging_radius <= 0:
+            raise Mg400Error("stagingRadius must be a positive finite number")
+
+        def radial_pose(source, z, r):
+            theta = math.atan2(source["y"], source["x"])
+            return {
+                "x": staging_radius * math.cos(theta),
+                "y": staging_radius * math.sin(theta),
+                "z": z,
+                "r": r,
+            }
+
+        staging_start = radial_pose(start, start["z"], start["r"])
+        staging_start_high = {**staging_start, "z": travel_z}
+        staging_target_high = radial_pose(target, travel_z, target["r"])
+        staging_target = {**staging_target_high, "z": target["z"]}
+        candidates = [
+            ("retract_to_staging", staging_start, travel_speed),
+            ("lift_staging", staging_start_high, travel_speed),
+            ("traverse_staging", staging_target_high, travel_speed),
+            ("descend_staging", staging_target, descent_speed),
+            ("extend_from_staging", target, descent_speed),
+        ]
     stages = []
     segment_start = start
     for name, stage_pose, stage_speed in candidates:
@@ -306,6 +333,7 @@ def build_safe_trajectory(current_pose, target_pose, options):
         "travelZ": travel_z,
         "travelSpeed": travel_speed,
         "descentSpeed": descent_speed,
+        "stagingRadius": staging_radius,
         "startPose": start,
         "targetPose": target,
         "stages": stages,

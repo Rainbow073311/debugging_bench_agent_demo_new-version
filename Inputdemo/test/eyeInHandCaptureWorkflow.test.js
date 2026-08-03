@@ -53,13 +53,14 @@ function armMock(statuses) {
   };
 }
 
-test("eye-in-hand height defaults use the requested low-travel capture profile", () => {
+test("eye-in-hand height defaults use the requested Z=50 safe-travel profile", () => {
   const result = readEyeInHandCaptureConfig({
     EYE_IN_HAND_GLOBAL_POSE_JSON: '{"x":345.5,"y":-40.8,"z":999}'
   });
   assert.deepEqual(result.globalPose, { x: 345.5, y: -40.8, z: 50 });
   assert.equal(result.closeZ, -43.59);
-  assert.equal(result.trajectory.safeTravelZ, -43.59);
+  assert.equal(result.trajectory.safeTravelZ, 50);
+  assert.equal(result.trajectory.stagingRadius, 300);
 });
 
 test("eye-in-hand workflow is inert when capture is disabled", async () => {

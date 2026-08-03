@@ -105,6 +105,29 @@ class Mg400ProbeStepTests(unittest.TestCase):
         self.assertEqual(robot.dashboard_commands, [])
         self.assertTrue(robot.closed)
 
+    def test_safe_trajectory_stages_through_inner_radius_for_camera_height_change(self):
+        trajectory = bridge.build_safe_trajectory(
+            {"x": 350, "y": -20.9156, "z": 50, "r": 7.686619},
+            {"x": 373.285553, "y": -20.9156, "z": -43.59, "r": 7.686619},
+            {
+                "safeTravelZ": 50,
+                "stagingRadius": 300,
+                "travelSpeed": 20,
+                "descentSpeed": 8,
+            },
+        )
+
+        self.assertEqual(trajectory["stagingRadius"], 300)
+        self.assertEqual(
+            [stage["name"] for stage in trajectory["stages"]],
+            [
+                "retract_to_staging",
+                "traverse_staging",
+                "descend_staging",
+                "extend_from_staging",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

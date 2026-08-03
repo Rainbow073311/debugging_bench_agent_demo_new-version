@@ -248,6 +248,31 @@ test("MG400 safe trajectory lifts a lower start to the configured travel height"
   );
 });
 
+test("MG400 safe trajectory uses an inner-radius staging path across the Z=10 workspace neck", () => {
+  const trajectory = createMg400SafeTrajectory(
+    { x: 350, y: -20.9156, z: 50, r: 7.686619 },
+    { x: 373.285553, y: -20.9156, z: -43.59, r: 7.686619 },
+    {
+      mode: "safe-lift-traverse-descend",
+      safeTravelZ: 50,
+      stagingRadius: 300,
+      travelSpeed: 20,
+      descentSpeed: 8
+    }
+  );
+
+  assert.equal(trajectory.stagingRadius, 300);
+  assert.deepEqual(
+    trajectory.stages.map((stage) => stage.name),
+    [
+      "retract_to_staging",
+      "traverse_staging",
+      "descend_staging",
+      "extend_from_staging"
+    ]
+  );
+});
+
 test("MG400 safe trajectory blocks a straight traverse through the inner workspace", () => {
   assert.throws(
     () => createMg400SafeTrajectory(
