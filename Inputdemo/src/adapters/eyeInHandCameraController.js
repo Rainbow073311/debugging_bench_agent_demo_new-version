@@ -8,9 +8,17 @@ const bridgePath = fileURLToPath(new URL("../../scripts/eye_in_hand_camera.py", 
 
 function pythonCommand() {
   const userDir = process.env.USERPROFILE;
-  const candidates = [process.env.PYTHON, process.env.PYTHON_EXE,
+  const localAppData = process.env.LOCALAPPDATA
+    || (userDir ? path.join(userDir, "AppData", "Local") : null);
+  const candidates = [
+    process.env.EYE_IN_HAND_PYTHON,
+    process.env.PYTHON,
+    process.env.PYTHON_EXE,
+    localAppData && path.join(localAppData, "Programs", "Python", "Python312", "python.exe"),
+    localAppData && path.join(localAppData, "Programs", "Python", "Python311", "python.exe"),
     userDir && path.join(userDir, ".cache", "codex-runtimes", "codex-primary-runtime", "dependencies", "python", "python.exe"),
-    "python"].filter(Boolean);
+    "python"
+  ].filter(Boolean);
   return candidates.find((candidate) => !path.isAbsolute(candidate) || existsSync(candidate)) || "python";
 }
 
