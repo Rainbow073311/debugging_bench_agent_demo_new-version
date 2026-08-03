@@ -95,6 +95,36 @@ def _pose_delta(first: dict, second: dict) -> dict:
     }
 
 
+def _load_extrinsic_session(extrinsic_dir: Path) -> tuple[dict, dict]:
+    """Load geometry owned by this extrinsic session.
+
+    A session-local board definition prevents a 5 mm board from silently
+    inheriting the 10 mm board used for intrinsic calibration.
+    """
+    session_file = extrinsic_dir / "session.json"
+    if session_file.exists():
+        session = json.loads(session_file.read_text(encoding="utf-8-sig"))
+        return session, dict(session["orientation"])
+
+    # Backward compatibility for the completed legacy 10 mm session.
+    reference = json.loads(
+        (extrinsic_dir / "reference_points.json").read_text(encoding="utf-8-sig")
+    )
+    orientation = json.loads(
+        (extrinsic_dir / "board_orientation_check.json").read_text(
+            encoding="utf-8-sig"
+        )
+    )
+    return {
+        "board": reference["board"],
+        "coordinate_convention": reference["coordinate_convention"],
+        "board_pose_in_base_operational": reference[
+            "board_pose_in_base_operational"
+        ],
+        "camera_serial": reference["camera_serial"],
+    }, orientation
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Capture one synchronized fixed-R Basler/MG400 sample"
@@ -115,20 +145,22 @@ def main(argv=None) -> int:
     intrinsic_session = json.loads(
         (intrinsic_dir / "session.json").read_text(encoding="utf-8-sig")
     )
-    reference = json.loads(
-        (extrinsic_dir / "reference_points.json").read_text(encoding="utf-8-sig")
-    )
-    orientation = json.loads(
-        (extrinsic_dir / "board_orientation_check.json").read_text(encoding="utf-8-sig")
-    )
+    extrinsic_session, orientation = _load_extrinsic_session(extrinsic_dir)
     if orientation.get("status") != "confirmed" or orientation.get("p0_outer_label") != "3":
         raise RuntimeError("Outer-board P0 orientation has not been confirmed as label 3")
     camera_config = yaml.safe_load(CAMERA_CONFIG_FILE.read_text(encoding="utf-8-sig"))
     matrix = np.asarray(camera_config["intrinsics"]["camera_matrix"], dtype=np.float64)
     distortion = np.asarray(camera_config["intrinsics"]["dist_coeffs"], dtype=np.float64)
     robot_config = json.loads(ROBOT_CONFIG_FILE.read_text(encoding="utf-8-sig"))
-    pattern = tuple(int(value) for value in reference["board"]["pattern_inner_corners"])
-    object_points = _object_points(pattern, float(reference["board"]["square_size_mm"]))
+    camera_serial = str(extrinsic_session["camera_serial"])
+    if str(intrinsic_session["serial"]) != camera_serial:
+        raise RuntimeError(
+            "Intrinsic and extrinsic sessions refer to different cameras: "
+            f"{intrinsic_session['serial']} != {camera_serial}"
+        )
+    board = extrinsic_session["board"]
+    pattern = tuple(int(value) for value in board["pattern_inner_corners"])
+    object_points = _object_points(pattern, float(board["square_size_mm"]))
 
     before = _robot_status(robot_config)
     camera = _open_camera(intrinsic_session)
@@ -183,7 +215,7 @@ def main(argv=None) -> int:
             }
             dataset.update({"status": "validation", "samples": []})
         else:
-            board_pose = reference["board_pose_in_base_operational"]
+            board_pose = extrinsic_session["board_pose_in_base_operational"]
             dataset = {
                 "status": "collecting",
                 "target_plane_z_mm": float(board_pose["translation_mm"][2]),
@@ -191,9 +223,14 @@ def main(argv=None) -> int:
                     "translation_mm": board_pose["translation_mm"],
                     "R": board_pose["R"],
                 },
-                "board_coordinate_convention": reference["coordinate_convention"],
-                "camera_serial": reference["camera_serial"],
-                "fixed_r_reference_deg": float(before["pose"]["r"]),
+                "board": board,
+                "board_coordinate_convention": extrinsic_session[
+                    "coordinate_convention"
+                ],
+                "camera_serial": camera_serial,
+                "fixed_r_reference_deg": float(
+                    extrinsic_session.get("fixed_r_reference_deg", before["pose"]["r"])
+                ),
                 "samples": [],
             }
     fixed_r = float(dataset["fixed_r_reference_deg"])
