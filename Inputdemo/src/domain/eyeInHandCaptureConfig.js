@@ -7,7 +7,7 @@ const DEFAULTS = Object.freeze({
   globalZ: 50,
   closeX: 360.737183,
   closeY: -14.016606,
-  closeZ: -43.59,
+  closeZ: -27.421679,
   safeTravelZ: 50,
   stagingRadius: 300,
   fixedR: 7.686619,

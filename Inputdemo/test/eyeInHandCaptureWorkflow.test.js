@@ -60,7 +60,7 @@ test("eye-in-hand height defaults use the requested Z=50 safe-travel profile", (
   });
   assert.deepEqual(result.globalPose, { x: 345.5, y: -40.8, z: 50 });
   assert.deepEqual(result.fixedCloseXY, { x: 360.737183, y: -14.016606 });
-  assert.equal(result.closeZ, -43.59);
+  assert.equal(result.closeZ, -27.421679);
   assert.equal(result.trajectory.safeTravelZ, 50);
   assert.equal(result.trajectory.stagingRadius, 300);
 });
