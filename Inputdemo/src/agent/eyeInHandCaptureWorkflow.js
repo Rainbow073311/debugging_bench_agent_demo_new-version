@@ -38,6 +38,15 @@ function requireCompleted(result, label) {
   }
 }
 
+function requireStableCapturePose(before, after, label, tolerance = 0.05) {
+  const deltas = Object.fromEntries(
+    ["x", "y", "z", "r"].map((key) => [key, Math.abs(Number(after[key]) - Number(before[key]))])
+  );
+  if (Math.max(deltas.x, deltas.y, deltas.z, deltas.r) > tolerance) {
+    throw new Error(`${label} moved during camera exposure: ${JSON.stringify(deltas)}`);
+  }
+}
+
 function requireCalibratedPoseRange(pose, health, label) {
   const min = health.validRobotXYZMin;
   const max = health.validRobotXYZMax;
@@ -107,9 +116,10 @@ export async function executeEyeInHandCaptureWorkflow({
     const globalStatus = await armController.runCommand("status");
     if (modeLabel(globalStatus) !== "ENABLED_IDLE") throw new Error("MG400 was not idle after reaching the global camera pose.");
     const globalRobotPose = robotPose(globalStatus);
-    const poseTimestampMs = now();
     const globalCapture = await cameraController.capture({ config, robotPose: globalRobotPose, label: "global" });
-    if (now() - poseTimestampMs > config.maxPoseAgeMs) throw new Error("Robot pose associated with the global image is stale.");
+    const globalStatusAfterCapture = await armController.runCommand("status");
+    if (modeLabel(globalStatusAfterCapture) !== "ENABLED_IDLE") throw new Error("MG400 was not idle after the global capture.");
+    requireStableCapturePose(globalRobotPose, robotPose(globalStatusAfterCapture), "MG400");
     run.execution.camera.captures.push(globalCapture);
     onEvent("camera.global_capture_finished", { capture: globalCapture });
 
@@ -136,9 +146,10 @@ export async function executeEyeInHandCaptureWorkflow({
     const closeStatus = await armController.runCommand("status");
     if (modeLabel(closeStatus) !== "ENABLED_IDLE") throw new Error("MG400 was not idle before the close burst.");
     const closeRobotPose = robotPose(closeStatus);
-    const closePoseTimestampMs = now();
     const burst = await cameraController.captureBurst({ config, robotPose: closeRobotPose });
-    if (now() - closePoseTimestampMs > config.maxPoseAgeMs) throw new Error("Robot pose associated with the close images is stale.");
+    const closeStatusAfterCapture = await armController.runCommand("status");
+    if (modeLabel(closeStatusAfterCapture) !== "ENABLED_IDLE") throw new Error("MG400 was not idle after the close burst.");
+    requireStableCapturePose(closeRobotPose, robotPose(closeStatusAfterCapture), "MG400");
     if (!Array.isArray(burst.captures) || burst.captures.length !== 3) {
       throw new Error("Close capture must contain exactly three images.");
     }

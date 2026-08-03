@@ -146,6 +146,8 @@ test("eye-in-hand workflow moves high, localizes, hovers close, and injects the 
   const arm = armMock([
     status({ x: 290, y: 0, z: 80, r: 27 }),
     status({ x: 300, y: 0, z: 120, r: 7.686619 }),
+    status({ x: 300, y: 0, z: 120, r: 7.686619 }),
+    status({ x: 312, y: 4, z: -150, r: 7.686619 }),
     status({ x: 312, y: 4, z: -150, r: 7.686619 })
   ]);
   const selectedFile = {
@@ -202,10 +204,40 @@ test("eye-in-hand workflow moves high, localizes, hovers close, and injects the 
   assert.ok(events.includes("camera.selected_image_ready"));
 });
 
+test("global capture checks actual pose drift instead of rejecting a slow Basler exposure", async () => {
+  const run = createBenchRun({ command: "inspect PCB" });
+  const arm = armMock([
+    status({ x: 290, y: 0, z: 80, r: 27 }),
+    status({ x: 300, y: 0, z: 120, r: 7.686619 }),
+    status({ x: 300.06, y: 0, z: 120, r: 7.686619 })
+  ]);
+  const camera = {
+    async health() {
+      return { calibrationStatus: "calibrated", tablePlaneConfigured: true, cameraReady: true };
+    },
+    async capture({ robotPose }) {
+      return { path: "slow_global.jpg", robotPose, sharpness: 40 };
+    }
+  };
+
+  await assert.rejects(
+    executeEyeInHandCaptureWorkflow({
+      run,
+      armController: arm,
+      cameraController: camera,
+      config: config({ maxPoseAgeMs: 1 }),
+      sleep: async () => {}
+    }),
+    /moved during camera exposure/
+  );
+  assert.equal(run.execution.camera.status, "BLOCKED");
+});
+
 test("ambiguous PCB localization blocks the close move", async () => {
   const run = createBenchRun({ command: "inspect PCB" });
   const arm = armMock([
     status({ x: 290, y: 0, z: 80, r: 27 }),
+    status({ x: 300, y: 0, z: 120, r: 27 }),
     status({ x: 300, y: 0, z: 120, r: 27 })
   ]);
   const camera = {
@@ -234,6 +266,8 @@ test("BenchAgent injects the selected close image before creating the VLM case",
   const poses = [
     status({ x: 290, y: 0, z: 80, r: 27 }),
     status({ x: 300, y: 0, z: 120, r: 27 }),
+    status({ x: 300, y: 0, z: 120, r: 27 }),
+    status({ x: 312, y: 4, z: -150, r: 27 }),
     status({ x: 312, y: 4, z: -150, r: 27 })
   ];
   let executeCount = 0;
@@ -297,6 +331,8 @@ test("BenchAgent projects the VLM pixel from the selected close image and pauses
   const poses = [
     status({ x: 345.5, y: -40.8, z: 50, r: 7.686619 }),
     status({ x: 345.5, y: -40.8, z: 120, r: 7.686619 }),
+    status({ x: 345.5, y: -40.8, z: 120, r: 7.686619 }),
+    status({ x: 340, y: -35, z: 50, r: 7.686619 }),
     status({ x: 340, y: -35, z: 50, r: 7.686619 })
   ];
   let executeCount = 0;
