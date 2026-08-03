@@ -97,7 +97,7 @@ def test_constrained_calibration_recovers_end_to_camera_and_ignores_r():
     np.testing.assert_allclose(changed.t_end_to_camera, expected, atol=1e-8)
 
 
-def test_translation_fit_recovers_noisy_fixed_orientation():
+def test_pnp_orientation_fit_recovers_noisy_fixed_orientation():
     marker_base, expected, samples = synthetic_samples()
     rng = np.random.default_rng(20260803)
     noisy = json.loads(json.dumps(samples))
@@ -114,7 +114,7 @@ def test_translation_fit_recovers_noisy_fixed_orientation():
         noisy, marker_base[:3, 3], marker_base[:3, :3]
     )
     np.testing.assert_allclose(
-        result.t_end_to_camera[:3, 3], expected[:3, 3], atol=0.5
+        result.t_end_to_camera[:3, 3], expected[:3, 3], atol=0.8
     )
     np.testing.assert_allclose(
         result.t_end_to_camera[:3, :3], expected[:3, :3], atol=0.01

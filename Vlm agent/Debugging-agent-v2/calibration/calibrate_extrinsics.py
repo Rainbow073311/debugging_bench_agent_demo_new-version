@@ -64,7 +64,7 @@ def build_extrinsics(calibration, sample_count):
         "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "mount_mode": "eye_in_hand_xyz",
         "status": "calibrated",
-        "method": "known-marker XYZ translation rigid registration (Kabsch)",
+        "method": "known-board PnP orientation with XYZ-constrained translation",
         "transform_convention": (
             "T_end_to_camera is the camera pose expressed in the end frame "
             "and maps camera coordinates into end coordinates"

@@ -193,21 +193,27 @@ def estimate_eye_in_hand_xyz(
         dtype=np.float64,
     )
     marker_offsets_from_end_base = marker_t_base - robot_positions
-    camera_r_base, camera_t_end, singular_values = _fit_rigid_translation_model(
+    kabsch_r_base, _, singular_values = _fit_rigid_translation_model(
         marker_vectors_camera,
         marker_offsets_from_end_base,
         minimum_observability_ratio,
     )
-    transform = make_transform(camera_r_base, camera_t_end)
 
-    # Planar solvePnP rotations are noisier than translations in this setup.
-    # Keep them as an independent orientation cross-check, not the main fit.
+    # The full board provides a much longer orientation baseline than the
+    # approximately 30 mm robot translation span. Use its averaged PnP
+    # orientation for pixel projection and keep Kabsch as a cross-check.
     marker_rotations_camera = [rotation_from_sample(sample) for sample in samples]
-    pnp_camera_r_base = _project_to_rotation(
+    camera_r_base = _project_to_rotation(
         marker_r_base @ marker_r_camera.T
         for marker_r_camera in marker_rotations_camera
     )
-    rotation_delta = pnp_camera_r_base.T @ camera_r_base
+    camera_t_end = np.mean(
+        marker_offsets_from_end_base
+        - (camera_r_base @ marker_vectors_camera.T).T,
+        axis=0,
+    )
+    transform = make_transform(camera_r_base, camera_t_end)
+    rotation_delta = camera_r_base.T @ kabsch_r_base
     rotation_crosscheck_error_deg = float(
         np.degrees(
             np.arccos(np.clip((np.trace(rotation_delta) - 1.0) / 2.0, -1.0, 1.0))

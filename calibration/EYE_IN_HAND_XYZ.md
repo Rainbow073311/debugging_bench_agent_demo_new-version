@@ -111,10 +111,12 @@ returns to the Z=80 mm safe pose on exit. Independent frames are collected by
 `run_basler_extrinsics_validation_sequence.py` into `validation_samples.json`;
 they are never included in the fitted transform.
 
-The XYZ-only solver uses synchronized camera-frame marker translations and
-robot XYZ positions in a Kabsch rigid registration. Per-frame planar PnP
-rotations are retained only as a cross-check. The solver rejects insufficient
-axis span and weak translation geometry before writing a transform.
+The XYZ-only solver averages full-board PnP orientations, then fits the fixed
+camera offset from synchronized camera-frame marker translations and robot XYZ
+positions. A Kabsch translation-only orientation is retained as a cross-check;
+the full board is the primary orientation baseline for pixel projection. The
+solver rejects insufficient axis span and weak translation geometry before
+writing a transform.
 
 ## Runtime requirements
 

@@ -170,10 +170,10 @@ quality:
     max_rmse_px: 0.8485134243965149
     passed: true
 extrinsics:
-  date: '2026-08-03 12:53:39'
+  date: '2026-08-03 13:10:52'
   mount_mode: eye_in_hand_xyz
   status: calibrated
-  method: known-marker XYZ translation rigid registration (Kabsch)
+  method: known-board PnP orientation with XYZ-constrained translation
   transform_convention: T_end_to_camera is the camera pose expressed in the end frame
     and maps camera coordinates into end coordinates
   robot_axes_used:
@@ -186,33 +186,33 @@ extrinsics:
   num_samples: 10
   T_end_to_camera:
     R:
-    - - -0.16070320270262212
-      - -0.9818312632797163
-      - 0.10090515887543046
-    - - -0.9866727313129309
-      - 0.15716409098750733
-      - -0.04214700211819094
-    - - 0.02552257676254889
-      - -0.10633352693589329
-      - -0.9940029070001619
+    - - -0.1000311579566232
+      - -0.9922780883749198
+      - 0.07333459462540592
+    - - -0.9934339889463742
+      - 0.0954908225133664
+      - -0.0630112086998515
+    - - 0.05552186095541722
+      - -0.0791561630369749
+      - -0.9953148370286214
     t_mm:
-    - -27.557560081526937
-    - 41.414130780263015
-    - 54.395788722990275
+    - -20.42181540283496
+    - 44.01405809040479
+    - 56.17656374567665
   quality:
-    mean_marker_residual_mm: 1.0706477607746427
-    max_marker_residual_mm: 2.538514437317749
+    mean_marker_residual_mm: 1.5513221601592173
+    max_marker_residual_mm: 3.429669047826825
     marker_residuals_mm:
-    - 1.433559473789671
-    - 0.33368916784363034
-    - 2.538514437317749
-    - 2.185416935641718
-    - 1.2417287832233284
-    - 1.8182414384577987
-    - 0.36762579559676334
-    - 0.3598139724065899
-    - 0.2984875786566008
-    - 0.12940002481257806
+    - 1.608365490175232
+    - 0.8069013473407425
+    - 1.9031310728752122
+    - 3.429669047826825
+    - 1.8272932040091017
+    - 2.095274238746879
+    - 0.6945439632814189
+    - 0.3171706563823752
+    - 1.7092673449996192
+    - 1.1216052359547675
     robot_xyz_span_mm:
     - 30.000045999999998
     - 30.000002
@@ -225,11 +225,11 @@ extrinsics:
     independent_validation:
       num_samples: 3
       residuals_mm:
-      - 1.088443450245346
-      - 1.0248446619033096
-      - 0.9260174149704815
-      mean_residual_mm: 1.0131018423730456
-      max_residual_mm: 1.088443450245346
+      - 1.4134528630483263
+      - 1.0416847972491918
+      - 1.9372656004409918
+      mean_residual_mm: 1.46413442024617
+      max_residual_mm: 1.9372656004409918
 table_homography:
   table_z_mm: -149.48003
   source: eye_in_hand_target_plane_in_robot_base
