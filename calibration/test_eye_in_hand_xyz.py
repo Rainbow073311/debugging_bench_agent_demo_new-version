@@ -27,7 +27,7 @@ def synthetic_samples():
         {"x": 260.0, "y": 0.0, "z": 120.0, "r": -30.0},
         {"x": 280.0, "y": 40.0, "z": 140.0, "r": 0.0},
         {"x": 300.0, "y": -20.0, "z": 160.0, "r": 45.0},
-        {"x": 320.0, "y": 20.0, "z": 180.0, "r": 120.0},
+        {"x": 320.0, "y": 20.0, "z": 160.0, "r": 120.0},
     ]
     samples = []
     for pose in robot_poses:
@@ -95,6 +95,51 @@ def test_constrained_calibration_recovers_end_to_camera_and_ignores_r():
         marker_base[:3, :3],
     )
     np.testing.assert_allclose(changed.t_end_to_camera, expected, atol=1e-8)
+
+
+def test_translation_fit_recovers_noisy_fixed_orientation():
+    marker_base, expected, samples = synthetic_samples()
+    rng = np.random.default_rng(20260803)
+    noisy = json.loads(json.dumps(samples))
+    for sample in noisy:
+        measured = np.asarray(sample["marker_pose_in_camera"]["t_mm"])
+        sample["marker_pose_in_camera"]["t_mm"] = (
+            measured + rng.normal(0.0, 0.15, size=3)
+        ).tolist()
+        sample["marker_pose_in_camera"]["rvec"][0] += float(
+            rng.normal(0.0, 0.03)
+        )
+
+    result = estimate_eye_in_hand_xyz(
+        noisy, marker_base[:3, 3], marker_base[:3, :3]
+    )
+    np.testing.assert_allclose(
+        result.t_end_to_camera[:3, 3], expected[:3, 3], atol=0.5
+    )
+    np.testing.assert_allclose(
+        result.t_end_to_camera[:3, :3], expected[:3, :3], atol=0.01
+    )
+    assert result.mean_residual_mm < 0.3
+
+
+def test_translation_fit_rejects_degenerate_samples():
+    marker_base, _, samples = synthetic_samples()
+    degenerate = json.loads(json.dumps(samples))
+    for index, sample in enumerate(degenerate):
+        sample["robot_pose"].update(
+            {"x": 200.0 + 20.0 * index, "y": 10.0, "z": 100.0}
+        )
+        sample["marker_pose_in_camera"]["t_mm"] = [
+            50.0 - 20.0 * index, 20.0, 300.0
+        ]
+
+    with pytest.raises(ValueError, match="geometrically degenerate"):
+        estimate_eye_in_hand_xyz(
+            degenerate,
+            marker_base[:3, 3],
+            marker_base[:3, :3],
+            minimum_axis_span_mm=0.0,
+        )
 
 
 def test_live_camera_pose_uses_xyz_but_not_r():

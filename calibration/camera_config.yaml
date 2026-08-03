@@ -170,13 +170,67 @@ quality:
     max_rmse_px: 0.8485134243965149
     passed: true
 extrinsics:
+  date: '2026-08-03 12:53:39'
   mount_mode: eye_in_hand_xyz
-  status: uncalibrated
+  status: calibrated
+  method: known-marker XYZ translation rigid registration (Kabsch)
+  transform_convention: T_end_to_camera is the camera pose expressed in the end frame
+    and maps camera coordinates into end coordinates
   robot_axes_used:
   - x
   - y
   - z
   robot_axes_ignored:
   - r
-  camera_orientation_source: pending_fixed_calibration
-  note: Run XYZ eye-in-hand calibration before pixel-to-robot projection.
+  camera_orientation_source: fixed_calibration
+  num_samples: 10
+  T_end_to_camera:
+    R:
+    - - -0.16070320270262212
+      - -0.9818312632797163
+      - 0.10090515887543046
+    - - -0.9866727313129309
+      - 0.15716409098750733
+      - -0.04214700211819094
+    - - 0.02552257676254889
+      - -0.10633352693589329
+      - -0.9940029070001619
+    t_mm:
+    - -27.557560081526937
+    - 41.414130780263015
+    - 54.395788722990275
+  quality:
+    mean_marker_residual_mm: 1.0706477607746427
+    max_marker_residual_mm: 2.538514437317749
+    marker_residuals_mm:
+    - 1.433559473789671
+    - 0.33368916784363034
+    - 2.538514437317749
+    - 2.185416935641718
+    - 1.2417287832233284
+    - 1.8182414384577987
+    - 0.36762579559676334
+    - 0.3598139724065899
+    - 0.2984875786566008
+    - 0.12940002481257806
+    robot_xyz_span_mm:
+    - 30.000045999999998
+    - 30.000002
+    - 32.50001199999999
+    translation_fit_singular_values:
+    - 1656.3267969594478
+    - 1104.2142430264541
+    - 615.1196128629166
+    rotation_crosscheck_error_deg: 4.147488997514765
+    independent_validation:
+      num_samples: 3
+      residuals_mm:
+      - 1.088443450245346
+      - 1.0248446619033096
+      - 0.9260174149704815
+      mean_residual_mm: 1.0131018423730456
+      max_residual_mm: 1.088443450245346
+table_homography:
+  table_z_mm: -149.48003
+  source: eye_in_hand_target_plane_in_robot_base
+  note: Only the base-frame plane Z is used; no fixed-camera H is reused.

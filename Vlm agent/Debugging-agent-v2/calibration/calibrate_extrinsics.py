@@ -35,12 +35,13 @@ import json
 import os
 from datetime import datetime
 
+import numpy as np
 import yaml
 
 try:
-    from .eye_in_hand_xyz import estimate_eye_in_hand_xyz
+    from .eye_in_hand_xyz import estimate_eye_in_hand_xyz, robot_xyz
 except ImportError:  # Direct execution: python calibration/calibrate_extrinsics.py
-    from eye_in_hand_xyz import estimate_eye_in_hand_xyz
+    from eye_in_hand_xyz import estimate_eye_in_hand_xyz, robot_xyz
 
 
 DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "camera_config.yaml")
@@ -63,7 +64,7 @@ def build_extrinsics(calibration, sample_count):
         "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "mount_mode": "eye_in_hand_xyz",
         "status": "calibrated",
-        "method": "known-marker constrained XYZ eye-in-hand",
+        "method": "known-marker XYZ translation rigid registration (Kabsch)",
         "transform_convention": (
             "T_end_to_camera is the camera pose expressed in the end frame "
             "and maps camera coordinates into end coordinates"
@@ -81,6 +82,12 @@ def build_extrinsics(calibration, sample_count):
             "max_marker_residual_mm": calibration.max_residual_mm,
             "marker_residuals_mm": list(calibration.marker_residuals_mm),
             "robot_xyz_span_mm": list(calibration.robot_xyz_span_mm),
+            "translation_fit_singular_values": list(
+                calibration.translation_fit_singular_values
+            ),
+            "rotation_crosscheck_error_deg": (
+                calibration.rotation_crosscheck_error_deg
+            ),
         },
     }
 
@@ -114,6 +121,32 @@ def write_config(config_path, extrinsics, target_plane_z_mm=None):
         )
 
 
+def evaluate_independent_samples(calibration, dataset):
+    marker = np.asarray(
+        dataset["marker_pose_in_base"]["translation_mm"], dtype=np.float64
+    )
+    transform = calibration.t_end_to_camera
+    residuals = []
+    for sample in dataset.get("samples", []):
+        camera_marker = np.asarray(
+            sample["marker_pose_in_camera"]["t_mm"], dtype=np.float64
+        )
+        predicted = (
+            robot_xyz(sample["robot_pose"])
+            + transform[:3, 3]
+            + transform[:3, :3] @ camera_marker
+        )
+        residuals.append(float(np.linalg.norm(predicted - marker)))
+    if not residuals:
+        raise ValueError("independent validation dataset contains no samples")
+    return {
+        "num_samples": len(residuals),
+        "residuals_mm": residuals,
+        "mean_residual_mm": float(np.mean(residuals)),
+        "max_residual_mm": float(np.max(residuals)),
+    }
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Calibrate the XYZ-only eye-in-hand camera without moving hardware"
@@ -135,6 +168,11 @@ def parse_args(argv=None):
     )
     parser.add_argument("--minimum-samples", type=int, default=5)
     parser.add_argument("--minimum-axis-span-mm", type=float, default=10.0)
+    parser.add_argument("--minimum-observability-ratio", type=float, default=1e-3)
+    parser.add_argument(
+        "--validation-dataset",
+        help="independent samples used only for validation, never for fitting",
+    )
     parser.add_argument(
         "--target-plane-z-mm",
         type=float,
@@ -155,8 +193,20 @@ def main(argv=None):
         marker["R"],
         minimum_samples=args.minimum_samples,
         minimum_axis_span_mm=args.minimum_axis_span_mm,
+        minimum_observability_ratio=args.minimum_observability_ratio,
     )
     extrinsics = build_extrinsics(calibration, len(samples))
+    if args.validation_dataset:
+        validation = load_dataset(args.validation_dataset)
+        validation_marker = validation["marker_pose_in_base"]
+        if not (
+            np.allclose(validation_marker["translation_mm"], marker["translation_mm"])
+            and np.allclose(validation_marker["R"], marker["R"])
+        ):
+            raise ValueError("validation dataset uses a different marker pose in base")
+        extrinsics["quality"]["independent_validation"] = (
+            evaluate_independent_samples(calibration, validation)
+        )
 
     print("XYZ-only eye-in-hand calibration")
     target_plane_z_mm = args.target_plane_z_mm if args.target_plane_z_mm is not None else dataset.get("target_plane_z_mm")
@@ -170,6 +220,24 @@ def main(argv=None):
     )
     print(f"  mean marker residual: {calibration.mean_residual_mm:.4f} mm")
     print(f"  max marker residual: {calibration.max_residual_mm:.4f} mm")
+    print(
+        "  translation-fit singular values: "
+        + ", ".join(
+            f"{value:.4f}" for value in calibration.translation_fit_singular_values
+        )
+    )
+    print(
+        "  rotation cross-check difference: "
+        f"{calibration.rotation_crosscheck_error_deg:.4f} deg"
+    )
+    if args.validation_dataset:
+        quality = extrinsics["quality"]["independent_validation"]
+        print(
+            "  independent validation: "
+            f"{quality['num_samples']} samples, mean "
+            f"{quality['mean_residual_mm']:.4f} mm, max "
+            f"{quality['max_residual_mm']:.4f} mm"
+        )
 
     if args.write:
         if target_plane_z_mm is None:

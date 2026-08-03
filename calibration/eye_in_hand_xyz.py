@@ -53,6 +53,40 @@ def _project_to_rotation(matrices: Iterable[np.ndarray]) -> np.ndarray:
     return rotation
 
 
+def _fit_rigid_translation_model(
+    marker_vectors_camera: np.ndarray,
+    marker_offsets_from_end_base: np.ndarray,
+    minimum_observability_ratio: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Fit ``y = t + R @ x`` and reject geometrically weak datasets."""
+    camera_centered = marker_vectors_camera - np.mean(marker_vectors_camera, axis=0)
+    base_centered = marker_offsets_from_end_base - np.mean(
+        marker_offsets_from_end_base, axis=0
+    )
+    covariance = base_centered.T @ camera_centered
+    u, singular_values, vt = np.linalg.svd(covariance)
+    if singular_values[0] <= np.finfo(np.float64).eps:
+        raise ValueError("calibration translations have no measurable variation")
+    observability_ratio = singular_values[-1] / singular_values[0]
+    if observability_ratio < minimum_observability_ratio:
+        raise ValueError(
+            "calibration translations are geometrically degenerate; covariance "
+            f"singular values were {', '.join(f'{value:.4f}' for value in singular_values)} "
+            f"(minimum ratio {minimum_observability_ratio:.6f})"
+        )
+
+    rotation = u @ vt
+    if np.linalg.det(rotation) < 0:
+        u[:, -1] *= -1
+        rotation = u @ vt
+    translation = np.mean(
+        marker_offsets_from_end_base
+        - (rotation @ marker_vectors_camera.T).T,
+        axis=0,
+    )
+    return rotation, translation, singular_values
+
+
 def robot_xyz(pose: Mapping[str, Any] | Sequence[float]) -> np.ndarray:
     """Return robot XYZ and intentionally ignore any R value."""
     if isinstance(pose, Mapping):
@@ -109,6 +143,8 @@ class EyeInHandCalibration:
     mean_residual_mm: float
     max_residual_mm: float
     robot_xyz_span_mm: tuple[float, float, float]
+    translation_fit_singular_values: tuple[float, float, float]
+    rotation_crosscheck_error_deg: float
 
 
 def estimate_eye_in_hand_xyz(
@@ -118,6 +154,7 @@ def estimate_eye_in_hand_xyz(
     *,
     minimum_samples: int = 5,
     minimum_axis_span_mm: float = 10.0,
+    minimum_observability_ratio: float = 1e-3,
 ) -> EyeInHandCalibration:
     """Estimate a fixed end-to-camera transform from a known stationary marker.
 
@@ -145,27 +182,37 @@ def estimate_eye_in_hand_xyz(
             f"{spans[0]:.1f}, {spans[1]:.1f}, {spans[2]:.1f} mm"
         )
 
+    marker_vectors_camera = np.array(
+        [
+            _as_translation(
+                sample["marker_pose_in_camera"]["t_mm"],
+                "marker_pose_in_camera.t_mm",
+            )
+            for sample in samples
+        ],
+        dtype=np.float64,
+    )
+    marker_offsets_from_end_base = marker_t_base - robot_positions
+    camera_r_base, camera_t_end, singular_values = _fit_rigid_translation_model(
+        marker_vectors_camera,
+        marker_offsets_from_end_base,
+        minimum_observability_ratio,
+    )
+    transform = make_transform(camera_r_base, camera_t_end)
+
+    # Planar solvePnP rotations are noisier than translations in this setup.
+    # Keep them as an independent orientation cross-check, not the main fit.
     marker_rotations_camera = [rotation_from_sample(sample) for sample in samples]
-    camera_rotations_base = [
+    pnp_camera_r_base = _project_to_rotation(
         marker_r_base @ marker_r_camera.T
         for marker_r_camera in marker_rotations_camera
-    ]
-    camera_r_base = _project_to_rotation(camera_rotations_base)
-
-    offsets = []
-    marker_vectors_camera = []
-    for robot_position, sample in zip(robot_positions, samples):
-        marker_t_camera = _as_translation(
-            sample["marker_pose_in_camera"]["t_mm"],
-            "marker_pose_in_camera.t_mm",
+    )
+    rotation_delta = pnp_camera_r_base.T @ camera_r_base
+    rotation_crosscheck_error_deg = float(
+        np.degrees(
+            np.arccos(np.clip((np.trace(rotation_delta) - 1.0) / 2.0, -1.0, 1.0))
         )
-        marker_vectors_camera.append(marker_t_camera)
-        offsets.append(
-            marker_t_base - robot_position - camera_r_base @ marker_t_camera
-        )
-
-    camera_t_end = np.mean(offsets, axis=0)
-    transform = make_transform(camera_r_base, camera_t_end)
+    )
 
     residuals = []
     for robot_position, marker_t_camera in zip(
@@ -182,4 +229,8 @@ def estimate_eye_in_hand_xyz(
         mean_residual_mm=float(np.mean(residuals)),
         max_residual_mm=float(np.max(residuals)),
         robot_xyz_span_mm=tuple(float(value) for value in spans),
+        translation_fit_singular_values=tuple(
+            float(value) for value in singular_values
+        ),
+        rotation_crosscheck_error_deg=rotation_crosscheck_error_deg,
     )

@@ -23,7 +23,9 @@ The camera transform only consumes the Z value associated with an image.
 
 `calibrate_extrinsics.py` is offline and does not open the camera, connect to
 the robot, or send motion commands. `verify_transform.py` opens the camera and
-reads robot status, but is read-only and does not move the robot.
+reads robot status, but is read-only and does not move the robot. The two
+`run_basler_extrinsics_*_sequence.py` tools do move the robot and may only be
+run after explicit authorization for the fixed-R calibration trajectory.
 
 ## Required calibration data
 
@@ -61,10 +63,12 @@ fixture.
 
 ## Dry-run and write
 
-Review quality without changing the config:
+Review fit quality and independent validation without changing the config:
 
 ```powershell
-python calibration/calibrate_extrinsics.py --dataset path\to\samples.json
+python calibration/calibrate_extrinsics.py `
+  --dataset path\to\samples.json `
+  --validation-dataset path\to\validation_samples.json
 ```
 
 Write only after reviewing the mean and maximum marker residuals:
@@ -72,6 +76,7 @@ Write only after reviewing the mean and maximum marker residuals:
 ```powershell
 python calibration/calibrate_extrinsics.py `
   --dataset path\to\samples.json `
+  --validation-dataset path\to\validation_samples.json `
   --write
 ```
 
@@ -94,6 +99,23 @@ table_homography:
 
 The former fixed `T_base_to_cam` schema is rejected. Historical values are
 retained only under `legacy_extrinsics_do_not_use`.
+
+## Basler fixed-R acquisition
+
+For the current Basler installation, `capture_basler_extrinsics_sample.py`
+requires `ENABLED_IDLE`, verifies that XYZ/R remain stable during exposure,
+rejects incomplete 9x6 detections and rejects PnP reprojection RMSE above
+1.5 px. `run_basler_extrinsics_sequence.py` fixes R at `7.686619` degrees,
+resumes from the existing sample count, uses a Z=90 mm travel height, and
+returns to the Z=80 mm safe pose on exit. Independent frames are collected by
+`run_basler_extrinsics_validation_sequence.py` into `validation_samples.json`;
+they are never included in the fitted transform.
+
+The XYZ-only solver uses synchronized camera-frame marker translations and
+robot XYZ positions in a Kabsch rigid registration. Per-frame planar PnP
+rotations are retained only as a cross-check. The solver rejects insufficient
+axis span and weak translation geometry before writing a transform.
+
 ## Runtime requirements
 
 - Bind the MG400 XYZ pose read for the selected frame.
