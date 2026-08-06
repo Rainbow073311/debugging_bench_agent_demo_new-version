@@ -21,28 +21,28 @@ calibration:
 extrinsics:
   T_end_to_camera:
     R:
-    - - -0.011101313068459604
-      - -0.9931721564460054
-      - 0.11612849998405851
-    - - -0.9997881642367815
-      - 0.009011586786090004
-      - -0.018504538784941814
-    - - 0.017331690633134656
-      - -0.11630932449287203
-      - -0.9930618075103935
+    - - 0.9977468806188616
+      - -0.05847858279487168
+      - -0.03288491401286939
+    - - -0.059165633036938996
+      - -0.998041305413804
+      - -0.020321923020438396
+    - - -0.03163210525192317
+      - 0.022221792056755695
+      - -0.9992525215755611
     t_mm:
-    - -50.846465711777064
-    - 29.018810564871018
-    - 57.74056049492925
+    - -5.670062704908113
+    - 72.11071131550314
+    - 51.85328990041976
   camera_orientation_source: fixed_calibration
-  date: '2026-08-06'
-  method: known-board PnP + XYZ hand-eye
+  date: recalibrated-7.687
+  method: known-board PnP + XYZ-constrained hand-eye
   mount_mode: eye_in_hand_xyz
   num_samples: 12
   quality:
-    max_marker_residual_mm: 0.410564663804234
-    mean_marker_residual_mm: 0.27963353982478956
-    rotation_crosscheck_error_deg: 1.7309680776758538
+    max_marker_residual_mm: 0.7346101085581151
+    mean_marker_residual_mm: 0.4035672387593015
+    rotation_crosscheck_error_deg: 2.4693778844368834
   robot_axes_ignored:
   - r
   robot_axes_used:
@@ -69,11 +69,11 @@ intrinsics:
   - 0.0012158392859037024
   - -1.4784485414719144
 runtime_safety:
-  close_capture_z_mm: -44.24000000000001
+  close_capture_z_mm: -49.20000000000002
   fixed_r_deg: 7.687
   global_capture_z_mm: 50.0
   safe_height_z_mm: 50.0
 table_homography:
-  table_z_mm: -156.24
+  table_z_mm: -161.20000000000002
 xy_pose_correction:
   status: uncalibrated
