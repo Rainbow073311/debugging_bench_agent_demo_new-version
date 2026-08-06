@@ -1222,31 +1222,6 @@ class Agent:
                 allowed_tools=["search_pdf_text", "mark_tp_on_assembly_from_pdf_hit", "pdf_page_to_image", "view_image", "run_python"],
             ),
             WorkflowPlanStep(
-                step_id="partback_vlm_landmarks",
-                title=f"Optional {normalized}-side PCB-edge opening review",
-                objective=(
-                    f"Compare the marked locator with INPUT_PATHS.{photo_key}. Inspect only PCB-edge "
-                    "mounting/tooling holes or cutouts. Record zero matches "
-                    "when ambiguous, or at least two high-confidence pairs. Rectangle mapping "
-                    "remains the safe base path."
-                ),
-                done_any_artifacts=[
-                    "debug/back_02_edge_hole_candidates.json",
-                    "debug/back_02_vlm_edge_hole_candidate_sheet.png",
-                    "debug/back_03_vlm_edge_hole_review.json",
-                ],
-                allowed_tools=[
-                    "prepare_back_board_landmark_candidates",
-                    "view_image",
-                    "record_back_landmark_review",
-                ],
-                next_action_hint=(
-                    "Call prepare_back_board_landmark_candidates with "
-                    f"back_board_path=INPUT_PATHS.{photo_key}. Record reliable pairs, or "
-                    "matches=[] so registration keeps the rectangle mapping."
-                ),
-            ),
-            WorkflowPlanStep(
                 step_id="partback_board_registration",
                 title=f"{normalized.capitalize()} board outline and hole registration",
                 objective=(
@@ -1386,7 +1361,6 @@ class Agent:
     def _route_outline_tool_arguments(self, tool: str, arguments: Any) -> Any:
         """Force outline/hole tools onto the physical photo selected by the task."""
         if tool not in {
-            "prepare_back_board_landmark_candidates",
             "register_back_board_from_outline_and_holes",
             "emit_step08_from_back_board_registration",
         }:
@@ -3656,9 +3630,6 @@ class Agent:
             "debug/back_board_registration_overlay.png",
             "debug/back_01_locator_outline.png",
             "debug/back_01_photo_outline.png",
-            "debug/back_02_edge_hole_candidates.json",
-            "debug/back_02_vlm_edge_hole_candidate_sheet.png",
-            "debug/back_03_vlm_edge_hole_review.json",
             "debug/back_04_reprojection_overlay.png",
             "debug/back_04_registration_validation.json",
             "debug/back_05_tp_projection.png",
@@ -3710,8 +3681,15 @@ class Agent:
                     errors.append("step08_result.json missing pixel [x,y].")
                 elif abs(float(target[0]) - float(pixel[0])) > 1.0 or abs(float(target[1]) - float(pixel[1])) > 1.0:
                     errors.append("Back Step08 pixel must match back_board_registration target (±1px).")
+                # Skip inlier-hole gate when registration did not use hole refinement
+                # (fixed_outline / fixed_fixture orientation), or when orientation was
+                # contract-locked via bottom_view_display contract.
+                hole_refinement_attempted = (
+                    reg.get("edge_hole_refinement_validation", {}) or {}
+                ).get("attempted", True)
                 if (
-                    int(reg.get("inlier_hole_count", 0)) < 2
+                    hole_refinement_attempted
+                    and int(reg.get("inlier_hole_count", 0)) < 2
                     and reg.get("orientation_source") != "bottom_view_display_contract_tl_to_tl"
                 ):
                     errors.append("Back registration requires at least two inlier mounting/tooling landmarks.")

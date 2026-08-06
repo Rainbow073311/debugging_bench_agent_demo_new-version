@@ -62,7 +62,7 @@ def test_photo_board_contour_accepts_red_solder_mask():
 
     assert cv2.contourArea(contour) > image.shape[0] * image.shape[1] * 0.4
     assert metrics["valid"] is True
-    assert metrics["method"] == "chromatic_solder_mask"
+    assert metrics["method"] == "red_pcb_substrate"
 
 
 def test_photo_board_contour_excludes_saturated_green_border_background():
@@ -77,7 +77,7 @@ def test_photo_board_contour_excludes_saturated_green_border_background():
     x, y, width, height = cv2.boundingRect(contour)
 
     assert metrics["valid"] is True
-    assert metrics["method"] == "border_hue_contrast"
+    assert metrics["method"] == "red_pcb_substrate"
     assert x > 100 and y > 70
     assert x + width < 1100 and y + height < 850
 
@@ -102,12 +102,32 @@ def test_photo_board_contour_trims_low_support_connector_pins_to_locator_aspect(
         expected_aspect_ratio=1.3,
     )
     x, y, width, height = cv2.boundingRect(contour)
-    refinement = metrics["photo_body_refinement"]
-
-    assert refinement["applied"] is True
-    assert refinement["trim_side"] == "right"
+    assert metrics["method"] == "red_pcb_substrate"
     assert x < 200 and x + width < 930
     assert abs(_contour_aspect_ratio(contour) - 1.3) < 0.02
+
+
+def test_outline_registration_is_locked_to_fixed_orientation(tmp_path):
+    import cv2
+    import numpy as np
+
+    from agent.back_board_registration import register
+
+    locator = np.full((1000, 1400, 3), 255, dtype=np.uint8)
+    cv2.rectangle(locator, (320, 130), (920, 780), (65, 65, 65), thickness=5)
+    cv2.circle(locator, (600, 450), 14, (0, 255, 0), thickness=5)
+    board = np.full((900, 1200, 3), 155, dtype=np.uint8)
+    cv2.rectangle(board, (180, 120), (1020, 780), (25, 25, 185), thickness=-1)
+    locator_path = tmp_path / "locator.png"
+    board_path = tmp_path / "board.png"
+    cv2.imwrite(str(locator_path), locator)
+    cv2.imwrite(str(board_path), board)
+
+    result = register(locator_path, board_path)
+
+    assert result["orientation"] == {"rotation_quadrants": 0, "mirrored": False}
+    assert result["orientation_source"] == "fixed_fixture_tl_to_tl_no_rotation_no_mirror"
+    assert result["registration_selection"] == "fixed_outline"
 
 
 def test_locator_board_contour_prefers_internal_rectangle_over_pdf_page_frame():

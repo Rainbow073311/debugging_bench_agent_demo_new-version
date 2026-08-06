@@ -47,13 +47,16 @@ function requireStableCapturePose(before, after, label, tolerance = 0.05) {
   }
 }
 
-function requireCalibratedPoseRange(pose, health, label) {
+function requireCalibratedPoseRange(pose, health, label, { xyMarginMm = 0 } = {}) {
   const min = health.validRobotXYZMin;
   const max = health.validRobotXYZMax;
   if (!Array.isArray(min) || !Array.isArray(max) || min.length !== 3 || max.length !== 3) return;
   const values = [pose.x, pose.y, pose.z].map(Number);
-  if (values.some((value, index) => !Number.isFinite(value) || value < Number(min[index]) || value > Number(max[index]))) {
-    throw new Error(`${label} is outside the calibrated eye-in-hand XYZ range.`);
+  for (let i = 0; i < 3; i += 1) {
+    const margin = i < 2 ? xyMarginMm : 0;
+    if (!Number.isFinite(values[i]) || values[i] < Number(min[i]) - margin || values[i] > Number(max[i]) + margin) {
+      throw new Error(`${label} is outside the calibrated eye-in-hand XYZ range.`);
+    }
   }
 }
 
@@ -63,6 +66,7 @@ export async function executeEyeInHandCaptureWorkflow({
   armController,
   cameraController,
   config = readEyeInHandCaptureConfig(),
+  outputDir = null,
   onEvent = () => {},
   sleep = delay,
   now = () => Date.now()
@@ -82,6 +86,8 @@ export async function executeEyeInHandCaptureWorkflow({
     }
     if (!cameraController) throw new Error("Eye-in-hand camera controller is unavailable.");
 
+    if (outputDir) config.outputDir = outputDir;
+
     const health = await cameraController.health(config);
     run.execution.camera.calibrationFile = health.calibrationFile || config.calibrationFile || null;
     if (health.calibrationStatus !== "calibrated") {
@@ -100,6 +106,9 @@ export async function executeEyeInHandCaptureWorkflow({
     }
     robotPose(initialStatus);
     const fixedR = Number(health.fixedR ?? config.fixedR);
+    run.execution.camera.fixedR = fixedR;
+    run.execution.camera.validRobotXYZMin = health.validRobotXYZMin || null;
+    run.execution.camera.validRobotXYZMax = health.validRobotXYZMax || null;
     if (!Number.isFinite(fixedR)) {
       throw new Error("Eye-in-hand motion requires a calibrated fixed camera R.");
     }
@@ -134,14 +143,18 @@ export async function executeEyeInHandCaptureWorkflow({
       throw new Error(`PCB coarse localization is not unique (${localization.candidateCount ?? 0} candidates).`);
     }
     run.execution.camera.localization = localization;
-    run.execution.camera.fixedClosePose = closePose;
-    onEvent("camera.pcb_coarse_localized", { localization, fixedClosePose: closePose });
+    const recommended = localization.recommendedEndXY;
+    const adjustedClosePose = recommended
+      ? { x: Number(recommended.x), y: Number(recommended.y), z: closePose.z, r: closePose.r }
+      : { ...closePose };
+    run.execution.camera.fixedClosePose = adjustedClosePose;
+    onEvent("camera.pcb_coarse_localized", { localization, adjustedClosePose });
 
-    const closeStep = motionStep("camera-close-pose", "MOVE_TO_CAMERA_CLOSE_HOVER", closePose, config.trajectory);
+    const closeStep = motionStep("camera-close-pose", "MOVE_TO_CAMERA_CLOSE_HOVER", adjustedClosePose, config.trajectory);
     const closeMove = await armController.execute(closeStep);
     run.execution.arm.push(closeMove);
     requireCompleted(closeMove, "Close camera move");
-    onEvent("camera.close_pose_reached", { pose: closeMove.executedPose || closePose });
+    onEvent("camera.close_pose_reached", { pose: closeMove.executedPose || adjustedClosePose });
 
     await sleep(config.settleMs);
     const closeStatus = await armController.runCommand("status");

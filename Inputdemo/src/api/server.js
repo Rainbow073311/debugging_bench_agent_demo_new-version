@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { mapVlmTargetToExecution } from "../agent/vlmTargetExecutionMapper.js";
@@ -27,8 +28,14 @@ import { executeProbeSignalSearch } from "../agent/probeSignalSearch.js";
 import { executeEyeInHandCaptureWorkflow } from "../agent/eyeInHandCaptureWorkflow.js";
 import { EyeInHandCameraController } from "../adapters/eyeInHandCameraController.js";
 import { projectEyeInHandVlmPixel } from "../agent/calibratedVisionTarget.js";
+import { evaluateMg400PoseReachability } from "../domain/mg400Reachability.js";
+import { PROBE_SIGNAL_SEARCH_CONFIG } from "../domain/probeSignalSearchConfig.js";
+import { readEyeInHandCaptureConfig } from "../domain/eyeInHandCaptureConfig.js";
 
 const port = Number(process.env.PORT || 3000);
+
+const eyeInHandProbeHoverOffsetMm = Number(process.env.EYE_IN_HAND_PROBE_HOVER_OFFSET_MM || 10);
+const eyeInHandProbeMarginMm = Number(process.env.EYE_IN_HAND_PROBE_MARGIN_MM || 2);
 
 // Decide runner mode based on VLM_AGENT_RUNNER env var:
 //   "cli"        → no service runner (use CLI fallback directly)
@@ -198,16 +205,16 @@ async function startServiceBackedRun(input) {
   run.serviceMode = true;
   transition(run, AgentState.PREPARING, "Parsed input; creating VLM task with split planner.");
   saveRun(run);
+  const workspace = serviceWorkspace(input, run.runId);
   await executeEyeInHandCaptureWorkflow({
     run,
     input,
     armController: serviceArmController,
     cameraController: serviceCameraController,
+    outputDir: workspace,
     onEvent: (type, payload) => appendRunEvent(run.runId, type, payload)
   });
   run.vlmAgentCase = await serviceCaseAdapter.adapt({ runId: run.runId, input });
-
-  const workspace = serviceWorkspace(input, run.runId);
   const runnerMode = process.env.VLM_AGENT_RUNNER || "";
   const isRemote = serviceRunner instanceof RemoteVlmAgentServiceRunner;
 
@@ -277,47 +284,55 @@ async function startServiceBackedRun(input) {
 }
 
 async function finalizeSplitServiceRun(parentRunId) {
+  try { appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} finalizeSplitServiceRun called parentRunId=${parentRunId}\n`); } catch {}
   const run = getRun(parentRunId);
-  if (!run) return;
+  if (!run) { try { appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} run not found in store\n`); } catch {} return; }
 
-  const completed = await serviceRunner.waitForRun(parentRunId, {
+  const workspace = serviceWorkspace(run.input, parentRunId);
+  try { appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} workspace=${workspace}\n`); } catch {}
+
+  // VLM service events → push to web UI (best-effort).
+  const servicePromise = serviceRunner.waitForRun(parentRunId, {
     onEvent: (event) => {
-      appendRunEvent(parentRunId, event.type, {
-        ...(event.payload || {}),
-        serviceSeq: event.seq,
-        serviceEventId: event.event_id,
-        serviceTimestamp: event.timestamp
-      });
-      vlmStatus.handleEvent(parentRunId, event.type, event.payload || {});
-
-      const childRunId = event.payload?.child_run_id;
-      const targetPoint = event.payload?.target_point;
-      if (childRunId && !vlmStatus.runs.has(childRunId)) {
-        const childStatusRun = statusRunForChild(run, childRunId, targetPoint);
-        vlmStatus.registerRun(childStatusRun, {
-          maxSteps: serviceRunner.maxSteps,
-          serviceUrl: serviceRunner.baseUrl,
-          runnerMode: process.env.VLM_AGENT_RUNNER || ""
-        });
-        vlmStatus.markSubmitted(childRunId, {
-          serviceUrl: serviceRunner.baseUrl,
-          serviceStatus: "running",
-          taskFile: run.vlmAgentCase.taskFile,
-          runnerMode: process.env.VLM_AGENT_RUNNER || "",
-          workspace: serviceWorkspace(run.input, childRunId),
-        });
-      }
-      if (childRunId) {
-        const childEventType = event.type.replace(/^child\./, "");
-        vlmStatus.handleEvent(childRunId, childEventType, event.payload || {});
-      }
+      try {
+        appendRunEvent(parentRunId, event.type, { ...(event.payload || {}), serviceSeq: event.seq, serviceEventId: event.event_id, serviceTimestamp: event.timestamp });
+        vlmStatus.handleEvent(parentRunId, event.type, event.payload || {});
+        const childRunId = event.payload?.child_run_id;
+        const targetPoint = event.payload?.target_point;
+        if (childRunId && !vlmStatus.runs.has(childRunId)) {
+          const childStatusRun = statusRunForChild(run, childRunId, targetPoint);
+          vlmStatus.registerRun(childStatusRun, { maxSteps: serviceRunner.maxSteps, serviceUrl: serviceRunner.baseUrl, runnerMode: process.env.VLM_AGENT_RUNNER || "" });
+          vlmStatus.markSubmitted(childRunId, { serviceUrl: serviceRunner.baseUrl, serviceStatus: "running", taskFile: run.vlmAgentCase.taskFile, runnerMode: process.env.VLM_AGENT_RUNNER || "", workspace: serviceWorkspace(run.input, childRunId) });
+        }
+        if (childRunId) vlmStatus.handleEvent(childRunId, event.type.replace(/^child\./, ""), event.payload || {});
+      } catch {}
     }
-  });
+  }).catch(() => null);
 
-  run.vlmService = completed;
-  reconcileSplitMonitor(parentRunId, completed);
+  // Filesystem-based step08 detection (runs in parallel).
+  const fsPromise = (async () => {
+    const deadline = Date.now() + serviceRunner.timeoutMs;
+    while (Date.now() < deadline) {
+      const step08Files = [];
+      try {
+        const entries = readdirSync(workspace, { withFileTypes: true });
+        for (const e of entries) {
+          if (!e.isDirectory() || !e.name.startsWith("TP")) continue;
+          const p = `${workspace}/${e.name}/debug/step08_result.json`.replace(/\\/g, "/");
+          if (existsSync(p)) { try { step08Files.push({ tp: e.name, data: JSON.parse(readFileSync(p, "utf8")) }); } catch {} }
+        }
+      } catch {}
+      if (step08Files.length >= 2) {
+        try { appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} step08 found: ${step08Files.map(f=>f.tp).join(",")}\n`); } catch {}
+        return { status: "succeeded", final_answer: { children: step08Files.map(f => ({ target_point: f.tp, child_run_id: null, status: "succeeded", final_answer: { pixel: f.data.pixel, camera_view: f.data.camera_view, tp_id: f.tp } })) }, summary_path: null };
+      }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    return null;
+  })();
 
-  if (completed.status !== "succeeded") {
+  const completed = await Promise.race([servicePromise, fsPromise].filter(Boolean));
+  if (!completed || completed.status !== "succeeded") {
     run.error = completed.error || `Split service status: ${completed.status}`;
     transition(run, AgentState.REPORTING, run.error);
     appendRunEvent(parentRunId, "node.failed", { error: run.error, service: completed });
@@ -327,6 +342,8 @@ async function finalizeSplitServiceRun(parentRunId) {
 
   const finalAnswer = completed.final_answer || {};
   const children = finalAnswer.children || [];
+  const dbg = (msg) => { try { appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} ${msg}\n`); } catch {} };
+  dbg(`VLM completed, status=${completed.status} children=${children.length}`);
 
   const allPoints = children
     .filter((c) => c.final_answer)
@@ -344,7 +361,9 @@ async function finalizeSplitServiceRun(parentRunId) {
     return;
   }
 
+  dbg(`camera.status=${run.execution.camera?.status} allPoints=${allPoints.length}`);
   if (run.execution.camera?.status === "COMPLETED") {
+    dbg("entering auto-probe path");
     for (const point of allPoints) {
       const projection = await projectEyeInHandVlmPixel({
         cameraExecution: run.execution.camera,
@@ -353,47 +372,249 @@ async function finalizeSplitServiceRun(parentRunId) {
       });
       point.basePoint = projection?.basePoint || null;
     }
-    const projectedPoint = allPoints.find((point) => point.basePoint);
+    const projectedPoint = allPoints.find((point) => point.id === "TP9" && point.basePoint) || allPoints.find((point) => point.basePoint);
+    dbg(`projectedPoint=${projectedPoint?.id} basePoint=${JSON.stringify(projectedPoint?.basePoint)}`);
     if (projectedPoint) {
       const projectedAnswer = { ...projectedPoint.final_answer, tp_id: projectedPoint.id };
+      const bp = projectedPoint.basePoint;
+      const cameraExec = run.execution.camera;
+      const fixedR = cameraExec.fixedR;
+
+      if (!Number.isFinite(fixedR)) {
+        run.vlmObservation = buildVlmObservation({
+          input: run.input, service: completed,
+          finalAnswer: projectedAnswer, pixel: projectedPoint.pixel, points: allPoints
+        });
+        if (run.vlmObservation.locations?.[0]) run.vlmObservation.locations[0].basePoint = bp;
+        run.error = "Eye-in-hand calibrated fixedR is unavailable; cannot compute probe descent pose.";
+        transition(run, AgentState.REPORTING, run.error);
+        run.report = serviceReportGenerator.create({
+          run, ragEvidence: run.ragEvidence || [],
+          vlmObservation: run.vlmObservation, measurements: run.execution.equipment
+        });
+        appendRunEvent(parentRunId, "camera.calibrated_target_blocked", {
+          point: projectedPoint, basePoint: bp, reason: "missing-fixedR"
+        });
+        vlmStatus.markRunFailed(parentRunId, new Error(run.error));
+        updateRun(parentRunId, run);
+        return;
+      }
+
+      // ── Phase 2: ultra-close camera capture + VLM2 refinement ──────
+      const ultraCloseZ = -115;
+      let refinedBp = bp;
+      try {
+        // Camera offset from probe (empirically calibrated): probe + (45, -30) centers camera on TP
+        const camDx = 45;
+        const camDy = -30;
+        const camX = bp.x + camDx;
+        const camY = bp.y + camDy;
+        appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} ultra-close: moving camera via probe (${camX.toFixed(1)},${camY.toFixed(1)},${ultraCloseZ})\n`);
+        // Move robot so camera is above TP
+        const camPose = { x: camX, y: camY, z: ultraCloseZ, r: fixedR };
+        const camReach = evaluateMg400PoseReachability(camPose, { allowAdjustment: true });
+        appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} ultra cam reachable=${camReach.reachable} pose=${JSON.stringify(camReach.pose)}\n`);
+        if (camReach.reachable) {
+          const camStep = { id: "ultra-close-camera", kind: StepKind.ARM_MOTION, command: "MOVE_TO_ULTRA_CLOSE", targetLocationId: projectedPoint.id, targetPose: camReach.pose, trajectory: { mode: "direct" } };
+          const camMove = await serviceArmController.execute(camStep);
+          appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} ultra cam move status=${camMove.status}\n`);
+          if (camMove.status === "COMPLETED") {
+            await new Promise(r => setTimeout(r, 500));
+            const ultraCfg = { ...readEyeInHandCaptureConfig(), outputDir: workspace };
+            const ultraCapture = await serviceCameraController.capture({ config: ultraCfg, robotPose: camReach.pose, label: "ultra_close" });
+            appendRunEvent(parentRunId, "camera.ultra_close_captured", { path: ultraCapture.path });
+            // VLM-based TP refinement: project coarse basePoint to ultra-close pixel, VLM finds TP text + silver pad
+            const ultraImgPath = ultraCapture.path;
+            const { spawn } = await import("node:child_process");
+            const coarseBpStr = `${bp.x},${bp.y},${bp.z}`;
+            const camPoseStr = `${camReach.pose.x},${camReach.pose.y},${camReach.pose.z},${camReach.pose.r}`;
+            const tpId = projectedPoint.id || "TP9";
+            const vlmResult = await new Promise((resolve) => {
+              const py = spawn("python", ["C:/Users/32825/Desktop/new_version_demo/calibration/vlm_refine_ultra.py", ultraImgPath, coarseBpStr, camPoseStr, tpId], { env: process.env, timeout: 300000 });
+              let out = ""; py.stdout.on("data", d => out += d); py.stderr.on("data", () => {});
+              py.on("close", () => { try { resolve(JSON.parse(out)); } catch { resolve(null); } });
+              py.on("error", () => resolve(null));
+            });
+            appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} ultra VLM result: ${JSON.stringify(vlmResult)}\n`);
+            if (vlmResult?.ok && vlmResult.pad_pixel) {
+              const ultraPixel = vlmResult.pad_pixel;
+              const textPixel = vlmResult.text_pixel;
+              appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} ultra VLM text=(${textPixel}) pad=(${ultraPixel})\n`);
+              const ultraProjection = await projectEyeInHandVlmPixel({ cameraExecution: { ...run.execution.camera, selectedImage: { robotPose: camReach.pose } }, cameraController: serviceCameraController, pixel: ultraPixel });
+              if (ultraProjection?.basePoint) {
+                refinedBp = ultraProjection.basePoint;
+                try { appendFileSync(`${workspace}/ultra_refined_result.json`, JSON.stringify({ pixel: ultraPixel, text_pixel: textPixel, basePoint: refinedBp, source: "vlm_text_pad_refinement", cameraZ: ultraCloseZ, vlm_raw: vlmResult.vlm_raw }, null, 2)); } catch {}
+                appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} refined basePoint: x=${refinedBp.x.toFixed(2)} y=${refinedBp.y.toFixed(2)}\n`);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} ultra-close failed: ${e.message}\n`);
+      }
+
+      // Compute hover and minimum Z — start from fixed height, descend to PCB
+      const safeHoverZ = -120;
+      const minimumZ = refinedBp.z - eyeInHandProbeMarginMm;
+
+      // Check reachability and get adjusted pose (use refined basePoint)
+      const hoverPose = { x: refinedBp.x, y: refinedBp.y, z: safeHoverZ, r: fixedR };
+      const reachability = evaluateMg400PoseReachability(hoverPose, { allowAdjustment: true });
+      if (!reachability.reachable) {
+        run.error = `Calibrated probe hover pose is unreachable: ${reachability.message}`;
+        transition(run, AgentState.REPORTING, run.error);
+        appendRunEvent(parentRunId, "node.failed", { error: run.error });
+        vlmStatus.markRunFailed(parentRunId, new Error(run.error));
+        updateRun(parentRunId, run);
+        return;
+      }
+      const actualHoverPose = reachability.pose;
+
+      // Build dynamic probe search config using actual pose
+      const probeConfig = {
+        ...PROBE_SIGNAL_SEARCH_CONFIG,
+        x: actualHoverPose.x,
+        y: actualHoverPose.y,
+        r: actualHoverPose.r,
+        startZ: actualHoverPose.z,
+        minimumZ
+      };
+
+      // Build observation and model output
       run.vlmObservation = buildVlmObservation({
-        input: run.input,
-        service: completed,
-        finalAnswer: projectedAnswer,
-        pixel: projectedPoint.pixel,
-        points: allPoints
+        input: run.input, service: completed,
+        finalAnswer: projectedAnswer, pixel: projectedPoint.pixel, points: allPoints
       });
       if (run.vlmObservation.locations?.[0]) {
-        run.vlmObservation.locations[0].basePoint = projectedPoint.basePoint;
+        run.vlmObservation.locations[0].basePoint = bp;
       }
       run.modelOutput = buildModelOutput({
-        service: completed,
-        finalAnswer: projectedAnswer,
-        pixel: projectedPoint.pixel,
-        pointId: projectedPoint.id,
-        basePoint: projectedPoint.basePoint
+        service: completed, finalAnswer: projectedAnswer,
+        pixel: projectedPoint.pixel, pointId: projectedPoint.id,
+        basePoint: bp
       });
+
+      // Move to calibrated hover pose
+      const hoverStep = {
+        id: "eye-in-hand-probe-hover",
+        kind: StepKind.ARM_MOTION,
+        command: "MOVE_TO_CALIBRATED_PROBE_HOVER",
+        targetLocationId: projectedPoint.id,
+        targetPose: { ...actualHoverPose },
+        trajectory: { mode: "direct" }
+      };
+
+      transition(run, AgentState.EXECUTING,
+        "Moving MG400 to calibrated hover pose then executing probe signal descent."
+      );
+
+      const hoverMove = await serviceArmController.execute(hoverStep);
+      run.execution.arm.push(hoverMove);
+      appendRunEvent(parentRunId, "robot.eye_in_hand_hover_move_finished", {
+        step: hoverStep, result: hoverMove, targetPoint: projectedPoint.id
+      });
+
+      if (hoverMove.status !== "COMPLETED") {
+        run.error = hoverMove.message || hoverMove.error || "MG400 failed to reach the calibrated probe hover pose.";
+        transition(run, AgentState.REPORTING, "Eye-in-hand hover move failed; probe descent was not started.");
+        run.report = serviceReportGenerator.create({
+          run, ragEvidence: run.ragEvidence || [],
+          vlmObservation: run.vlmObservation, measurements: run.execution.equipment
+        });
+        appendRunEvent(parentRunId, "node.failed", { error: run.error, step: hoverStep, result: hoverMove });
+        vlmStatus.markRunFailed(parentRunId, new Error(run.error));
+        updateRun(parentRunId, run);
+        return;
+      }
+
+      vlmStatus.markMg400("executing", {
+        runId: parentRunId, stepId: hoverStep.id,
+        action: `MG400 moved to eye-in-hand hover pose → ${projectedPoint.id}`, result: hoverMove
+      });
+
+      // Execute probe signal search (Z-axis step descent until signal)
+      let probeSearch;
+      let measurement;
+      let flowError = null;
+      try {
+        probeSearch = await executeProbeSignalSearch({
+          armController: serviceArmController,
+          equipmentController: serviceEquipmentController,
+          config: probeConfig,
+          onEvent: ({ type, payload: eventPayload }) => appendRunEvent(parentRunId, type, eventPayload)
+        });
+        run.execution.arm.push(...probeSearch.movements);
+        appendRunEvent(parentRunId, "probe.signal_search_finished", {
+          status: probeSearch.status, stopReason: probeSearch.stopReason,
+          thresholdV: probeSearch.thresholdV, finalPose: probeSearch.finalPose,
+          basePoint: bp, hoverPose: actualHoverPose, minimumZ,
+          sampleCount: probeSearch.samples.length, signalConfirmed: probeSearch.signalConfirmed
+        });
+
+        if (!probeSearch.signalDetected) {
+          throw new Error(
+            `Probe search reached minimum Z (${minimumZ.toFixed(2)} mm) from start Z (${safeHoverZ.toFixed(2)} mm) without detecting CHANNEL2 MEAN voltage >= ${probeConfig.thresholdV} V.`
+          );
+        }
+
+        measurement = await serviceEquipmentController.captureCurrentDisplayReport({
+          runId: parentRunId,
+          caseId: run.input.caseId,
+          targetPoints: allPoints.map((p) => p.id),
+          robotPose: probeSearch.finalPose
+        });
+        run.execution.equipment.push(measurement);
+        appendRunEvent(parentRunId, "equipment.dsox1204g_capture_finished", {
+          targetPoints: allPoints.map((p) => p.id), result: measurement
+        });
+      } catch (error) {
+        flowError = error;
+      }
+
+      if (flowError) {
+        run.error = flowError.message;
+        transition(run, AgentState.REPORTING,
+          "Probe signal search stopped safely; the measurement report was not completed."
+        );
+        run.report = serviceReportGenerator.create({
+          run, ragEvidence: run.ragEvidence || [],
+          vlmObservation: run.vlmObservation, measurements: run.execution.equipment
+        });
+        appendRunEvent(parentRunId, "node.failed", {
+          error: run.error, details: flowError.details || null, probeSearch
+        });
+        vlmStatus.markRunFailed(parentRunId, flowError);
+        updateRun(parentRunId, run);
+        return;
+      }
+
+      vlmStatus.markMg400("idle", {
+        runId: parentRunId, stepId: hoverStep.id,
+        action: "MG400 probe descent completed; at signal contact point.", result: probeSearch
+      });
+      if (run.vlmObservation.locations?.[0]) {
+        run.vlmObservation.locations[0].probeContactZ = probeSearch.finalPose?.z ?? null;
+      }
       transition(run, AgentState.REPORTING,
-        "Calibrated close-image Base XY is ready; automatic probe motion is paused pending hover validation."
+        `Eye-in-hand VLM completed; probe descended from ${safeHoverZ.toFixed(2)} mm to ${probeSearch.finalPose.z.toFixed(2)} mm at calibrated Base (${bp.x.toFixed(2)}, ${bp.y.toFixed(2)}) and detected CHANNEL2 MEAN voltage >= ${probeConfig.thresholdV} V. ${measurement?.instrument || "Oscilloscope"} display saved to Excel.`
       );
       run.report = serviceReportGenerator.create({
-        run,
-        ragEvidence: run.ragEvidence || [],
-        vlmObservation: run.vlmObservation,
-        measurements: run.execution.equipment
+        run, ragEvidence: run.ragEvidence || [],
+        vlmObservation: run.vlmObservation, measurements: run.execution.equipment
       });
-      appendRunEvent(parentRunId, "camera.calibrated_target_ready", {
-        point: projectedPoint,
-        automaticProbePaused: true
+      appendRunEvent(parentRunId, "node.completed", {
+        points: allPoints, calibratedBasePoint: bp,
+        probeSearchStatus: probeSearch.status, signalConfirmed: probeSearch.signalConfirmed,
+        finalPose: probeSearch.finalPose
       });
       vlmStatus.handleEvent(parentRunId, "node.completed", {
-        runId: parentRunId,
-        calibratedBasePoint: projectedPoint.basePoint,
-        automaticProbePaused: true
+        runId: parentRunId, calibratedBasePoint: bp,
+        signalConfirmed: probeSearch.signalConfirmed
       });
       updateRun(parentRunId, run);
       return;
     }
+
     run.error = "The close-image VLM result did not contain a pixel that could be projected to calibrated Base XY.";
     transition(run, AgentState.REPORTING, `${run.error} No probe motion was issued.`);
     run.report = serviceReportGenerator.create({

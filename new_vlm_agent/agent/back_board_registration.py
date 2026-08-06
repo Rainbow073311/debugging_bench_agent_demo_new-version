@@ -286,6 +286,35 @@ def _board_contour(
     gray = cv2.cvtColor(work, cv2.COLOR_BGR2GRAY)
     rh, rw = work.shape[:2]
     if domain == "photo":
+        # The production fixture uses a red PCB.  Detect the solder-mask body
+        # before the generic chromatic fallback so black cables, metal pin
+        # headers, gold contacts and other protrusions cannot enlarge the PCB
+        # rectangle.
+        #
+        # Strong morphological OPEN breaks thin connector / pin-header bridges
+        # so they don't pull the fitted rectangle outward.  A smaller, single-
+        # iteration CLOSE later only fills narrow internal gaps without
+        # reconnecting already-severed protrusions.
+        hue = hsv[:, :, 0]
+        saturation = hsv[:, :, 1]
+        value = hsv[:, :, 2]
+        red_substrate = (
+            ((hue <= 14) | (hue >= 170))
+            & (saturation >= 55)
+            & (value >= 25)
+        ).astype(np.uint8) * 255
+        # ── opening to sever thin fragments ─────────────────────────────
+        opening_scale = max(7, int(round(min(rh, rw) * 0.006)))
+        if opening_scale % 2 == 0:
+            opening_scale += 1
+        red_substrate = cv2.morphologyEx(
+            red_substrate,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (opening_scale, opening_scale)
+            ),
+        )
+
         # Estimate the surrounding surface from the image border.  When that
         # surface is chromatic (for example case-204's green ESD mat), retain
         # only saturated pixels whose hue differs from it.  On a neutral
@@ -301,31 +330,33 @@ def _board_contour(
         hue_samples = saturated_border[:, 0] if saturated_border.size else border[:, 0]
         background_hue = int(np.bincount(hue_samples, minlength=180).argmax())
         background_saturation = float(np.median(border[:, 1]))
-        saturation = hsv[:, :, 1]
-        value = hsv[:, :, 2]
-        if background_saturation >= 40:
+        red_area_ratio = float(np.count_nonzero(red_substrate) / max(1, rh * rw))
+        if red_area_ratio >= 0.06:
+            mask = red_substrate
+            photo_method = "red_pcb_substrate"
+        elif background_saturation >= 40:
             hue_distance = np.abs(hsv[:, :, 0].astype(np.int16) - background_hue)
             hue_distance = np.minimum(hue_distance, 180 - hue_distance)
             chromatic = (saturation >= 55) & (value >= 25) & (hue_distance >= 20)
             photo_method = "border_hue_contrast"
+            mask = chromatic.astype(np.uint8) * 255
         else:
             chromatic = (saturation >= 75) & (value >= 25)
             photo_method = "chromatic_solder_mask"
-
-        blue, green, red = cv2.split(work)
-        b16 = blue.astype(np.int16)
-        g16 = green.astype(np.int16)
-        r16 = red.astype(np.int16)
-        green_dominant = (
-            (g16 >= 45)
-            & (g16 >= r16 + 10)
-            & (g16 >= b16 + 10)
-        )
-        # The green fallback is safe only when the surrounding surface is
-        # neutral; otherwise it would reconnect a green mat to the whole image.
-        if background_saturation < 40:
+            blue, green, red = cv2.split(work)
+            b16 = blue.astype(np.int16)
+            g16 = green.astype(np.int16)
+            r16 = red.astype(np.int16)
+            green_dominant = (
+                (g16 >= 45)
+                & (g16 >= r16 + 10)
+                & (g16 >= b16 + 10)
+            )
+            # The green fallback is safe only when the surrounding surface is
+            # neutral; otherwise it would reconnect a green mat to the image.
             chromatic |= green_dominant
-        mask = chromatic.astype(np.uint8) * 255
+            mask = chromatic.astype(np.uint8) * 255
+        # ── closing to fill internal gaps ────────────────────────────────
         scale = max(9, int(round(min(rh, rw) * 0.012)))
         retrieval_mode = cv2.RETR_EXTERNAL
     else:
@@ -345,7 +376,7 @@ def _board_contour(
         mask,
         cv2.MORPH_CLOSE,
         kernel,
-        iterations=2 if domain == "photo" else 1,
+        iterations=2 if domain == "locator" else 1,
     )
     contours, _ = cv2.findContours(mask, retrieval_mode, cv2.CHAIN_APPROX_SIMPLE)
     min_area = h * w * 0.05
@@ -355,9 +386,12 @@ def _board_contour(
 
     candidates: list[dict[str, Any]] = []
     margin = max(3, int(round(min(h, w) * 0.004)))
-    min_rectangularity = 0.78 if domain == "photo" else 0.55
+    min_rectangularity = 0.70 if domain == "photo" else 0.55
     for raw_contour in contours:
-        contour = cv2.convexHull(raw_contour) if domain == "photo" else raw_contour
+        # Photo domain uses the raw contour directly — convex hull would
+        # swallow cables, pin headers and other protrusions outside the
+        # physical PCB rectangle.
+        contour = raw_contour if domain == "photo" else cv2.convexHull(raw_contour)
         contour = contour + np.array([[[roi_x1, roi_y1]]], dtype=contour.dtype)
         rect = cv2.minAreaRect(contour)
         rect_area = max(1.0, float(rect[1][0] * rect[1][1]))
@@ -1103,7 +1137,6 @@ def register(
     review_file = Path(review_path) if review_path is not None else None
     review: dict[str, Any] = {}
     review_matches: list[dict[str, Any]] = []
-    hypotheses: list[dict[str, Any]] = []
     loc_ok: list[dict[str, Any]] = []
     loc_rejected: list[dict[str, Any]] = []
     brd_ok: list[dict[str, Any]] = []
@@ -1116,10 +1149,6 @@ def register(
             review = json.loads(review_file.read_text(encoding="utf-8"))
             if review.get("review_source") == "vlm_visual_semantic_review" and isinstance(review.get("matches"), list):
                 review_matches = review["matches"]
-                hypotheses = _reviewed_hypotheses(
-                    locator_corners, board_corners, locator_mask, board_mask,
-                    loc_ok + loc_rejected, brd_ok + brd_rejected, review_matches,
-                )
         except Exception as exc:  # VLM review is advisory; rectangle path must remain available.
             review_error = str(exc)
 
@@ -1142,36 +1171,64 @@ def register(
     }
     matrix = rectangle_matrix
     score_margin = 1.0
-    orientation_source = "bottom_view_display_contract_tl_to_tl"
+    orientation_source = "fixed_fixture_tl_to_tl_no_rotation_no_mirror"
     refinement_validation: dict[str, Any] = {
         "attempted": bool(review_file is not None and review_file.is_file()),
         "accepted": False,
+        "orientation_locked": True,
+        "rotation_quadrants": 0,
+        "mirrored": False,
+        "hole_validation_passed": False,
         "fallback_reason": review_error or "no_valid_vlm_edge_hole_review",
     }
-    if not review_error and hypotheses:
-        reviewed_best = hypotheses[0]
-        reviewed_margin = float(reviewed_best["score"] - hypotheses[1]["score"]) if len(hypotheses) >= 2 else 0.0
-        if reviewed_best["pair_count"] >= 2 and reviewed_margin >= 0.12:
-            candidate_matrix, refinement_validation = _refine_homography_with_review(
-                locator_corners, board_mask, locator_mask, reviewed_best
-            )
-            if refinement_validation.get("accepted"):
-                matrix = candidate_matrix
-                best = dict(reviewed_best)
-                best["matrix"] = matrix
-                best["outline_iou"] = _outline_iou(locator_mask, board_mask, matrix)
-                orientation_source = "vlm_edge_holes_refined_homography"
-                score_margin = reviewed_margin
-            else:
-                refinement_validation["orientation_score_margin"] = round(reviewed_margin, 4)
-        else:
-            refinement_validation = {
-                "attempted": True,
-                "accepted": False,
-                "fallback_reason": "vlm_pairs_do_not_uniquely_validate_orientation",
-                "reviewed_pair_count": len(review_matches),
-                "orientation_score_margin": round(reviewed_margin, 4),
-            }
+    if not review_error and review_matches:
+        locator_by_id = {
+            item["id"]: item for item in (loc_ok + loc_rejected)
+        }
+        board_by_id = {
+            item["id"]: item for item in (brd_ok + brd_rejected)
+        }
+        validated_pairs: list[dict[str, Any]] = []
+        pair_errors: list[float] = []
+        for reviewed in review_matches:
+            locator_item = locator_by_id.get(str(reviewed.get("locator_id", "")))
+            board_item = board_by_id.get(str(reviewed.get("board_id", "")))
+            if locator_item is None or board_item is None:
+                continue
+            source_point = np.float32([[[locator_item["x"], locator_item["y"]]]])
+            projected_point = cv2.perspectiveTransform(source_point, rectangle_matrix)[0, 0]
+            distance = float(np.linalg.norm(
+                projected_point - np.float32([board_item["x"], board_item["y"]])
+            ))
+            pair_errors.append(distance)
+            if distance <= threshold:
+                validated_pairs.append({
+                    "locator_id": locator_item["id"],
+                    "board_id": board_item["id"],
+                    "locator_px": [locator_item["x"], locator_item["y"]],
+                    "board_px": [board_item["x"], board_item["y"]],
+                    "projected_px": [float(projected_point[0]), float(projected_point[1])],
+                    "error_px": distance,
+                })
+        best["pairs"] = validated_pairs
+        best["pair_count"] = len(validated_pairs)
+        best["mean_error_px"] = (
+            float(sum(pair["error_px"] for pair in validated_pairs) / len(validated_pairs))
+            if validated_pairs else 0.0
+        )
+        hole_validation_passed = len(validated_pairs) >= 2
+        refinement_validation = {
+            "attempted": True,
+            "accepted": False,
+            "orientation_locked": True,
+            "rotation_quadrants": 0,
+            "mirrored": False,
+            "hole_validation_passed": hole_validation_passed,
+            "reviewed_pair_count": len(review_matches),
+            "inlier_pair_count": len(validated_pairs),
+            "reviewed_errors_px": [round(value, 3) for value in pair_errors],
+            "fallback_reason": None if hole_validation_passed else "fixed_orientation_hole_validation_insufficient",
+        }
     tx, ty = _green_tp(locator)
     projected = cv2.perspectiveTransform(np.float32([[[tx, ty]]]), matrix)[0, 0]
     projected_x = float(np.clip(projected[0], 0, w - 1))
@@ -1193,7 +1250,7 @@ def register(
         "homography_3x3": [[round(float(value), 9) for value in row] for row in matrix.tolist()],
         "orientation": {"rotation_quadrants": best["rotation_quadrants"], "mirrored": best["mirrored"]},
         "orientation_source": orientation_source,
-        "registration_selection": "vlm_edge_holes_refined" if refinement_validation.get("accepted") else "rectangle_fallback",
+        "registration_selection": "fixed_outline_holes_validated" if refinement_validation.get("hole_validation_passed") else "fixed_outline",
         "edge_hole_refinement_validation": refinement_validation,
         "outline_iou": round(float(best["outline_iou"]), 4),
         "inlier_hole_count": int(best["pair_count"]),

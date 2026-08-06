@@ -179,8 +179,8 @@ def board_candidates(image: np.ndarray) -> list[dict[str, Any]]:
     red_mask = cv2.morphologyEx(
         red_mask,
         cv2.MORPH_CLOSE,
-        cv2.getStructuringElement(cv2.MORPH_RECT, (35, 35)),
-        iterations=2,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15)),
+        iterations=1,
     )
     red_contours, _ = cv2.findContours(
         red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -196,9 +196,12 @@ def board_candidates(image: np.ndarray) -> list[dict[str, Any]]:
         rectangularity = area / box_area if box_area > 0 else 0.0
         if rectangularity < 0.65:
             continue
+        M = cv2.moments(contour)
+        cx = float(M["m10"] / M["m00"]) if M["m00"] else float(rect[0][0])
+        cy = float(M["m01"] / M["m00"]) if M["m00"] else float(rect[0][1])
         box = cv2.boxPoints(rect)
         red_candidates.append({
-            "centerPixel": {"u": float(rect[0][0]), "v": float(rect[0][1])},
+            "centerPixel": {"u": cx, "v": cy},
             "cornersPixel": [
                 {"u": float(point[0]), "v": float(point[1])} for point in box
             ],
@@ -278,6 +281,22 @@ def coarse_localize(payload: dict[str, Any]) -> dict[str, Any]:
     if close_view_center is None:
         raise RuntimeError("Camera principal ray at close Z does not intersect the table plane.")
 
+    # ── annotate global image with detected PCB ─────────────────────────
+    annotated = image.copy()
+    best = candidates[0]
+    center_u, center_v = int(round(best["centerPixel"]["u"])), int(round(best["centerPixel"]["v"]))
+    cv2.drawMarker(annotated, (center_u, center_v), (0, 0, 255), cv2.MARKER_CROSS, 40, 3)
+    cv2.circle(annotated, (center_u, center_v), 30, (0, 0, 255), 3)
+    corners = [(int(round(p["u"])), int(round(p["v"]))) for p in best.get("cornersPixel", [])]
+    if len(corners) == 4:
+        cv2.polylines(annotated, [np.array(corners, dtype=np.int32)], True, (0, 255, 0), 3)
+    cv2.putText(annotated, "PCB center", (center_u + 30, center_v - 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+    cv2.putText(annotated, f"detector: {best['detector']}  score: {best['score']:.3f}",
+                (20, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    annotated_path = image_path.parent / f"global_localized_{image_path.stem}.jpg"
+    cv2.imwrite(str(annotated_path), annotated, [cv2.IMWRITE_JPEG_QUALITY, 92])
+
     return {
         "ok": True,
         "status": "UNIQUE",
@@ -285,11 +304,12 @@ def coarse_localize(payload: dict[str, Any]) -> dict[str, Any]:
         "candidate": candidates[0],
         "basePoint": {"x": point[0], "y": point[1], "z": point[2]},
         "recommendedEndXY": {
-            "x": float(robot_pose["x"]) + point[0] - close_view_center[0],
+            "x": float(robot_pose["x"]) + point[0] - close_view_center[0] + 15,
             "y": float(robot_pose["y"]) + point[1] - close_view_center[1],
         },
         "robotPose": robot_pose,
         "sourcePath": str(image_path),
+        "annotatedPath": str(annotated_path),
     }
 
 

@@ -1,25 +1,56 @@
 calibration:
-  date: '2026-08-03T11:21:02.642907+08:00'
-  status: calibrated
   camera_model: Basler acA2440-75uc
-  serial: '24771618'
+  chessboard:
+    pattern: 9x6
+    square_size_mm: 5.0
+  date: '2026-08-03T11:21:02.642907+08:00'
+  exposure_us: 400000
+  gain: 0
+  pixel_format: BayerRG8
   resolution:
   - 2448
   - 2048
   roi:
-    width: 2448
     height: 2048
     offset_x: 0
     offset_y: 0
-  pixel_format: BayerRG8
-  exposure_us: 400000
-  gain: 0
-  chessboard:
-    pattern: 9x6
-    square_size_mm: 10.0
-    images_used: 54
+    width: 2448
+  serial: '24771618'
   session: calibration_sessions\basler_intrinsics_refocused_20260803_103800
-  promoted_at: '2026-08-03T11:23:48.818084+08:00'
+  status: calibrated
+extrinsics:
+  T_end_to_camera:
+    R:
+    - - -0.011101313068459604
+      - -0.9931721564460054
+      - 0.11612849998405851
+    - - -0.9997881642367815
+      - 0.009011586786090004
+      - -0.018504538784941814
+    - - 0.017331690633134656
+      - -0.11630932449287203
+      - -0.9930618075103935
+    t_mm:
+    - -50.846465711777064
+    - 29.018810564871018
+    - 57.74056049492925
+  camera_orientation_source: fixed_calibration
+  date: '2026-08-06'
+  method: known-board PnP + XYZ hand-eye
+  mount_mode: eye_in_hand_xyz
+  num_samples: 12
+  quality:
+    max_marker_residual_mm: 0.410564663804234
+    mean_marker_residual_mm: 0.27963353982478956
+    rotation_crosscheck_error_deg: 1.7309680776758538
+  robot_axes_ignored:
+  - r
+  robot_axes_used:
+  - x
+  - y
+  - z
+  status: calibrated
+  transform_convention: T_end_to_camera maps camera coords into end-effector coords
 intrinsics:
   camera_matrix:
   - - 3559.222163909295
@@ -32,274 +63,17 @@ intrinsics:
     - 0.0
     - 1.0
   dist_coeffs:
-  - - -0.19427319016464503
-    - 0.3934392995869
-    - 8.86046160984686e-05
-    - 0.0012158392859037024
-    - -1.4784485414719144
-quality:
-  rms_error_px: 0.6853614116764636
-  mean_per_view_rmse_px: 0.6705199551803095
-  median_per_view_rmse_px: 0.6657975912094116
-  max_per_view_rmse_px: 1.056342601776123
-  outlier_threshold_px: 1.1455376177847385
-  outliers_excluded:
-  - file: pending/pending_034.jpg
-    initial_rmse_px: 1.4146147966384888
-  - file: pending/pending_001.jpg
-    initial_rmse_px: 1.6848706007003784
-  - file: pending/pending_029.jpg
-    initial_rmse_px: 1.7527390718460083
-  - file: pending/pending_032.jpg
-    initial_rmse_px: 1.1612257957458496
-  detection_failures:
-  - calib_002.jpg
-  per_image_errors_px:
-  - file: calib_001.jpg
-    rmse_px: 0.87848299741745
-  - file: calib_003.jpg
-    rmse_px: 0.7141251564025879
-  - file: pending/pending_055.jpg
-    rmse_px: 0.5462642908096313
-  - file: pending/pending_046.jpg
-    rmse_px: 0.5256997346878052
-  - file: pending/pending_056.jpg
-    rmse_px: 0.3986547589302063
-  - file: pending/pending_042.jpg
-    rmse_px: 0.5086157917976379
-  - file: pending/pending_050.jpg
-    rmse_px: 0.44063955545425415
-  - file: pending/pending_057.jpg
-    rmse_px: 0.6338649988174438
-  - file: pending/pending_049.jpg
-    rmse_px: 0.7076142430305481
-  - file: pending/pending_048.jpg
-    rmse_px: 0.4987735152244568
-  - file: pending/pending_077.jpg
-    rmse_px: 0.7230792045593262
-  - file: pending/pending_058.jpg
-    rmse_px: 0.5023115873336792
-  - file: pending/pending_051.jpg
-    rmse_px: 0.5295737385749817
-  - file: pending/pending_041.jpg
-    rmse_px: 0.5639864206314087
-  - file: pending/pending_044.jpg
-    rmse_px: 0.547882616519928
-  - file: pending/pending_047.jpg
-    rmse_px: 0.6003803014755249
-  - file: pending/pending_045.jpg
-    rmse_px: 0.6515392661094666
-  - file: pending/pending_075.jpg
-    rmse_px: 0.6664624810218811
-  - file: pending/pending_054.jpg
-    rmse_px: 0.9969071745872498
-  - file: pending/pending_052.jpg
-    rmse_px: 0.6028323173522949
-  - file: pending/pending_060.jpg
-    rmse_px: 0.798407256603241
-  - file: pending/pending_074.jpg
-    rmse_px: 0.6663179993629456
-  - file: pending/pending_059.jpg
-    rmse_px: 0.6993839144706726
-  - file: pending/pending_069.jpg
-    rmse_px: 0.6855955123901367
-  - file: pending/pending_066.jpg
-    rmse_px: 0.9288663268089294
-  - file: pending/pending_085.jpg
-    rmse_px: 0.9268122911453247
-  - file: pending/pending_006.jpg
-    rmse_px: 0.7484772801399231
-  - file: pending/pending_003.jpg
-    rmse_px: 0.6585597395896912
-  - file: pending/pending_015.jpg
-    rmse_px: 0.5386817455291748
-  - file: pending/pending_005.jpg
-    rmse_px: 0.7064736485481262
-  - file: pending/pending_035.jpg
-    rmse_px: 0.6652771830558777
-  - file: pending/pending_017.jpg
-    rmse_px: 0.7575312852859497
-  - file: pending/pending_027.jpg
-    rmse_px: 0.48615795373916626
-  - file: pending/pending_028.jpg
-    rmse_px: 0.6779078245162964
-  - file: pending/pending_019.jpg
-    rmse_px: 0.7894692420959473
-  - file: pending/pending_004.jpg
-    rmse_px: 0.7695860266685486
-  - file: pending/pending_016.jpg
-    rmse_px: 0.6264145970344543
-  - file: pending/pending_080.jpg
-    rmse_px: 0.7516919374465942
-  - file: pending/pending_026.jpg
-    rmse_px: 0.7325265407562256
-  - file: pending/pending_009.jpg
-    rmse_px: 0.7310247421264648
-  - file: pending/pending_064.jpg
-    rmse_px: 0.7758057117462158
-  - file: pending/pending_018.jpg
-    rmse_px: 0.8462662696838379
-  - file: pending/pending_008.jpg
-    rmse_px: 0.8751904964447021
-  - file: pending/pending_062.jpg
-    rmse_px: 0.8175499439239502
-  - file: pending/pending_007.jpg
-    rmse_px: 0.7299901247024536
-  - file: pending/pending_063.jpg
-    rmse_px: 0.5774760246276855
-  - file: pending/pending_030.jpg
-    rmse_px: 1.056342601776123
-  - file: pending/pending_002.jpg
-    rmse_px: 0.6642336249351501
-  - file: pending/pending_033.jpg
-    rmse_px: 0.4897874891757965
-  - file: pending/pending_081.jpg
-    rmse_px: 0.5924502015113831
-  - file: pending/pending_025.jpg
-    rmse_px: 0.48938751220703125
-  - file: pending/pending_024.jpg
-    rmse_px: 0.5387757420539856
-  - file: pending/pending_023.jpg
-    rmse_px: 0.5881401896476746
-  - file: pending/pending_020.jpg
-    rmse_px: 0.5838284492492676
-  holdout_verification:
-    images: 8
-    mean_rmse_px: 0.7051203101873398
-    median_rmse_px: 0.7596512734889984
-    max_rmse_px: 0.8485134243965149
-    passed: true
-extrinsics:
-  date: '2026-08-03 16:10:35'
-  mount_mode: eye_in_hand_xyz
-  status: calibrated
-  method: known-board PnP orientation with XYZ-constrained translation
-  transform_convention: T_end_to_camera is the camera pose expressed in the end frame
-    and maps camera coordinates into end coordinates
-  robot_axes_used:
-  - x
-  - y
-  - z
-  robot_axes_ignored:
-  - r
-  camera_orientation_source: fixed_calibration
-  num_samples: 10
-  T_end_to_camera:
-    R:
-    - - 0.032293647846208286
-      - -0.9948196126338009
-      - 0.09639013760712624
-    - - -0.9987786749000661
-      - -0.03572874940062842
-      - -0.03412645646908582
-    - - 0.03739356727639725
-      - -0.09517034614522894
-      - -0.9947584261221128
-    t_mm:
-    - -31.006782377555226
-    - 37.6290330866256
-    - 64.51476113448102
-  quality:
-    mean_marker_residual_mm: 1.7269051052687967
-    max_marker_residual_mm: 2.778683466605985
-    marker_residuals_mm:
-    - 1.2064599936033955
-    - 0.6134446910001145
-    - 2.1254368271163107
-    - 1.8110518709170764
-    - 2.778683466605985
-    - 0.9218296695138646
-    - 1.873753807320248
-    - 2.5273485143069556
-    - 0.9719076651524547
-    - 2.4391345471515606
-    robot_xyz_span_mm:
-    - 43.28557999999998
-    - 50.000004000000004
-    - 93.58997
-    translation_fit_singular_values:
-    - 19185.728907638924
-    - 1513.1521643421418
-    - 627.2953434545982
-    rotation_crosscheck_error_deg: 5.1958221152745105
-    independent_validation:
-      num_samples: 3
-      residuals_mm:
-      - 1.3397875970078097
-      - 1.4047623933907663
-      - 1.7759909545729888
-      mean_residual_mm: 1.5068469816571881
-      max_residual_mm: 1.7759909545729888
-table_homography:
-  table_z_mm: -149.48003
-  source: eye_in_hand_target_plane_in_robot_base
-  note: Only the base-frame plane Z is used; no fixed-camera H is reused.
-xy_pose_correction:
-  status: calibrated
-  method: robust linear Base-XY correction after eye-in-hand ray-plane projection
-  features:
-  - raw_x
-  - raw_y
-  - robot_x
-  - robot_y
-  - robot_z
-  - constant
-  coefficients:
-  - - 1.001235588211023
-    - -0.0022817611051357684
-  - - 0.00999533116937873
-    - 0.9951026388861743
-  - - -0.020149956764635837
-    - 0.038611065243982834
-  - - -0.07662670866982475
-    - 0.006216345202288927
-  - - 0.023409929901161818
-    - 0.009548701397858317
-  - - 5.608733395022042
-    - -12.941029532791802
-  fixed_r_deg: 7.686619
-  r_tolerance_deg: 0.1
-  valid_robot_xyz_min:
-  - 339.899967
-  - -31.015603000000002
-  - -43.689966
-  valid_robot_xyz_max:
-  - 383.38554700000003
-  - 19.184401
-  - 50.100004
-  valid_range_margin_mm: 0.1
-  training:
-    session: calibration_sessions\basler_close_5mm_20260803
-    frames_total: 10
-    chessboard_points_total: 540
-    inliers_used: 493
-    points: 493
-    mean_error_mm: 0.6115610178271317
-    median_error_mm: 0.5605790385464738
-    max_error_mm: 1.6912746709052782
-    raw_frame_rmse_mm:
-    - 0.9331138454118523
-    - 1.0329595884577318
-    - 2.132618528289873
-    - 1.4448836068563584
-    - 1.8615427331994046
-    - 0.7221934405986947
-    - 0.9900553113754776
-    - 1.9553472275317043
-    - 0.46352138748353755
-    - 1.352483847051605
-  independent_holdout:
-    frames: 3
-    points: 162
-    mean_error_mm: 0.6308125550820818
-    median_error_mm: 0.5561738385931272
-    max_error_mm: 1.7058351494086328
-    raw_frame_rmse_mm:
-    - 1.616379804880245
-    - 0.8465969816383219
-    - 0.8479701758632773
+  - -0.19427319016464503
+  - 0.3934392995869
+  - 8.86046160984686e-05
+  - 0.0012158392859037024
+  - -1.4784485414719144
 runtime_safety:
+  close_capture_z_mm: -44.24000000000001
+  fixed_r_deg: 7.687
   global_capture_z_mm: 50.0
-  close_capture_z_mm: -43.59
   safe_height_z_mm: 50.0
-  fixed_r_deg: 7.686619
+table_homography:
+  table_z_mm: -156.24
+xy_pose_correction:
+  status: uncalibrated
