@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, createReadStream } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { mapVlmTargetToExecution } from "../agent/vlmTargetExecutionMapper.js";
@@ -178,6 +178,14 @@ async function route(request, response) {
   const eventsMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/events$/);
   if (request.method === "GET" && eventsMatch) {
     await sendRunEvents(request, response, eventsMatch[1], Number(url.searchParams.get("since") || 0));
+    return;
+  }
+
+  // Serve workspace artifact images for frontend display
+  if (request.method === "GET" && url.pathname === "/api/files") {
+    const filePath = url.searchParams.get("path") || "";
+    if (!filePath) { sendJson(response, 400, { error: "Missing path param" }); return; }
+    serveStaticFile(response, filePath);
     return;
   }
 
@@ -429,6 +437,10 @@ async function finalizeSplitServiceRun(parentRunId) {
             const coarseBpStr = `${bp.x},${bp.y},${bp.z}`;
             const camPoseStr = `${camReach.pose.x},${camReach.pose.y},${camReach.pose.z},${camReach.pose.r}`;
             const tpId = projectedPoint.id || "TP9";
+            appendRunEvent(parentRunId, "camera.ultra_vlm_started", {
+              tp_id: tpId,
+              message: `VLM refining ${tpId} on ultra-close image...`
+            });
             const vlmResult = await new Promise((resolve) => {
               const py = spawn("python", ["C:/Users/32825/Desktop/new_version_demo/calibration/vlm_refine_ultra.py", ultraImgPath, coarseBpStr, camPoseStr, tpId], { env: process.env, timeout: 300000 });
               let out = ""; py.stdout.on("data", d => out += d); py.stderr.on("data", () => {});
@@ -439,6 +451,19 @@ async function finalizeSplitServiceRun(parentRunId) {
             if (vlmResult?.ok && vlmResult.pad_pixel) {
               const ultraPixel = vlmResult.pad_pixel;
               const textPixel = vlmResult.text_pixel;
+              const artifacts = vlmResult.artifacts || {};
+              const artifactUrls = {};
+              for (const [key, name] of Object.entries(artifacts)) {
+                artifactUrls[key] = `/api/files?path=${encodeURIComponent(workspace + "/" + name)}`;
+              }
+              appendRunEvent(parentRunId, "camera.ultra_vlm_completed", {
+                tp_id: tpId,
+                text_pixel: textPixel,
+                pad_pixel: ultraPixel,
+                pad_candidates: vlmResult.pad_candidates,
+                artifacts: artifactUrls,
+                message: `${tpId} refined: pad=(${ultraPixel[0]},${ultraPixel[1]})`
+              });
               appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} ultra VLM text=(${textPixel}) pad=(${ultraPixel})\n`);
               const ultraProjection = await projectEyeInHandVlmPixel({ cameraExecution: { ...run.execution.camera, selectedImage: { robotPose: camReach.pose } }, cameraController: serviceCameraController, pixel: ultraPixel });
               if (ultraProjection?.basePoint) {
@@ -446,6 +471,12 @@ async function finalizeSplitServiceRun(parentRunId) {
                 try { appendFileSync(`${workspace}/ultra_refined_result.json`, JSON.stringify({ pixel: ultraPixel, text_pixel: textPixel, basePoint: refinedBp, source: "vlm_text_pad_refinement", cameraZ: ultraCloseZ, vlm_raw: vlmResult.vlm_raw }, null, 2)); } catch {}
                 appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} refined basePoint: x=${refinedBp.x.toFixed(2)} y=${refinedBp.y.toFixed(2)}\n`);
               }
+            } else {
+              appendRunEvent(parentRunId, "camera.ultra_vlm_failed", {
+                tp_id: tpId,
+                error: vlmResult?.error || "VLM returned no result",
+                message: `${tpId} ultra VLM refinement failed`
+              });
             }
           }
         }
@@ -1099,6 +1130,27 @@ async function sendRunEvents(request, response, runId, since) {
   }
 
   response.end();
+}
+
+function serveStaticFile(response, filePath) {
+  // Only allow image files from workspace directories
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeTypes = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".bmp": "image/bmp" };
+  const contentType = mimeTypes[ext];
+  if (!contentType) { sendJson(response, 403, { error: "File type not allowed" }); return; }
+  // Security: path must contain "workspace" or "calibration"
+  const normalized = path.normalize(filePath).replace(/\\/g, "/");
+  if (!normalized.includes("workspace") && !normalized.includes("calibration")) {
+    sendJson(response, 403, { error: "Access denied" }); return;
+  }
+  if (!existsSync(filePath)) { sendJson(response, 404, { error: "File not found" }); return; }
+  try {
+    const stream = createReadStream(filePath);
+    response.writeHead(200, { "Content-Type": contentType, "Cache-Control": "no-cache" });
+    stream.pipe(response);
+  } catch (e) {
+    sendJson(response, 500, { error: "Failed to read file" });
+  }
 }
 
 function sleep(ms) {

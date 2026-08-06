@@ -396,6 +396,24 @@ export const webPage = String.raw`<!doctype html>
       line-height: 1.45;
       overflow-wrap: anywhere;
     }
+    .step-images {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 6px 0 2px;
+    }
+    .step-images img {
+      max-width: 180px;
+      max-height: 135px;
+      object-fit: contain;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      transition: transform 0.15s;
+    }
+    .step-images img:hover {
+      transform: scale(1.04);
+      border-color: var(--primary);
+    }
     @keyframes monitor-flow {
       from { background-position: 0 0; }
       to { background-position: 240% 0; }
@@ -894,6 +912,19 @@ export const webPage = String.raw`<!doctype html>
       if (event.type === "agent.failed") {
         return { title: "VLM failed", message: payload.error || "" };
       }
+      if (event.type === "camera.ultra_close_captured") {
+        return { title: "Ultra-close photo", message: payload.path || "" };
+      }
+      if (event.type === "camera.ultra_vlm_started") {
+        return { title: "Ultra VLM refining " + (payload.tp_id || ""), message: payload.message || "" };
+      }
+      if (event.type === "camera.ultra_vlm_completed") {
+        return { title: (payload.tp_id || "TP") + " ultra VLM done",
+          message: payload.message + " | artifacts: " + Object.keys(payload.artifacts || {}).join(", ") };
+      }
+      if (event.type === "camera.ultra_vlm_failed") {
+        return { title: "Ultra VLM failed", message: payload.error || payload.message || "" };
+      }
       return { title: event.type, message: "" };
     }
 
@@ -1109,6 +1140,41 @@ export const webPage = String.raw`<!doctype html>
           rows.push(timelineLifecycleRow(event, "failed", "Run failed", payload.error || payload.stopped_reason || ""));
           continue;
         }
+        // Camera / eye-in-hand pipeline events
+        if (event.type === "camera.ultra_close_captured") {
+          rows.push(timelineLifecycleRow(event, "running", "Ultra-close photo captured",
+            payload.path || ""));
+          continue;
+        }
+        if (event.type === "camera.ultra_vlm_started") {
+          rows.push(timelineLifecycleRow(event, "running",
+            "VLM refining " + (payload.tp_id || "TP") + " on ultra-close image",
+            payload.message || ""));
+          continue;
+        }
+        if (event.type === "camera.ultra_vlm_completed") {
+          const imgs = payload.artifacts || {};
+          const imgTags = Object.entries(imgs).map(([k, url]) =>
+            "<span class='artifact-thumb'><a href='" + escapeAttr(url) + "' target='_blank'>" +
+            "<img src='" + escapeAttr(url) + "' loading='lazy' style='max-width:160px;max-height:120px;border:1px solid var(--line);border-radius:4px;margin:2px;vertical-align:top' title='" + escapeAttr(k) + "'></a></span>"
+          ).join("");
+          rows.push({
+            key: event.event_id || event.seq || "ultra-vlm-done",
+            status: "done",
+            title: (payload.tp_id || "TP") + " ultra VLM refined",
+            message: (payload.message || "") + (imgTags ? "<br>" + imgTags : ""),
+            imagesHtml: imgTags,
+            order: 9700,
+            at: event.timestamp
+          });
+          continue;
+        }
+        if (event.type === "camera.ultra_vlm_failed") {
+          rows.push(timelineLifecycleRow(event, "failed",
+            "Ultra VLM refinement failed",
+            payload.error || payload.message || ""));
+          continue;
+        }
       }
 
       return [...rows, ...byStep.values(), ...byTool.values()]
@@ -1140,6 +1206,9 @@ export const webPage = String.raw`<!doctype html>
       const cls = row.status === "running" ? " running" : row.status === "failed" ? " failed" : row.status === "final" ? " final" : "";
       const when = row.at ? formatEventTime(row.at) : "";
       const message = [row.message, when].filter(Boolean).join(" | ");
+      const imgSection = row.imagesHtml
+        ? "<div class='step-images'>" + row.imagesHtml + "</div>"
+        : "";
       return [
         "<div class='step-row" + cls + "'>",
         "<div class='step-head'>",
@@ -1147,6 +1216,7 @@ export const webPage = String.raw`<!doctype html>
         "<div class='step-state'>" + escapeHtml(row.status || "-") + "</div>",
         "</div>",
         "<div class='step-meta'>" + escapeHtml(message || "-") + "</div>",
+        imgSection,
         "</div>"
       ].join("");
     }
@@ -1308,6 +1378,14 @@ export const webPage = String.raw`<!doctype html>
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+    }
+
+    function escapeAttr(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/</g, "&lt;");
     }
 
     function setStatus(el, text, kind = "") {
