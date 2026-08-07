@@ -199,35 +199,54 @@ def estimate_eye_in_hand_xyz(
         minimum_observability_ratio,
     )
 
-    # The full board provides a much longer orientation baseline than the
-    # approximately 30 mm robot translation span. Use its averaged PnP
-    # orientation for pixel projection and keep Kabsch as a cross-check.
+    # Two independent rotation estimates:
+    # 1) PnP-average: board orientation baseline, but inherits any error in the
+    #    probed marker rotation (probe Z noise tilts the board frame).
+    # 2) Kabsch: pure robot-translation fit, independent of probe orientation,
+    #    reliable once the XYZ lattice span is large.
+    # Pick whichever explains the samples better.
     marker_rotations_camera = [rotation_from_sample(sample) for sample in samples]
-    camera_r_base = _project_to_rotation(
+    pnp_r_base = _project_to_rotation(
         marker_r_base @ marker_r_camera.T
         for marker_r_camera in marker_rotations_camera
     )
-    camera_t_end = np.mean(
-        marker_offsets_from_end_base
-        - (camera_r_base @ marker_vectors_camera.T).T,
-        axis=0,
-    )
+
+    def _solve(rotation: np.ndarray):
+        translation = np.mean(
+            marker_offsets_from_end_base - (rotation @ marker_vectors_camera.T).T,
+            axis=0,
+        )
+        residuals = [
+            float(
+                np.linalg.norm(
+                    robot_position + translation + rotation @ marker_t_camera
+                    - marker_t_base
+                )
+            )
+            for robot_position, marker_t_camera in zip(
+                robot_positions, marker_vectors_camera
+            )
+        ]
+        return translation, residuals
+
+    pnp_t_end, pnp_residuals = _solve(pnp_r_base)
+    kabsch_t_end, kabsch_residuals = _solve(kabsch_r_base)
+    if np.mean(kabsch_residuals) < np.mean(pnp_residuals):
+        camera_r_base, camera_t_end, residuals = (
+            kabsch_r_base,
+            kabsch_t_end,
+            kabsch_residuals,
+        )
+    else:
+        camera_r_base, camera_t_end, residuals = pnp_r_base, pnp_t_end, pnp_residuals
+
     transform = make_transform(camera_r_base, camera_t_end)
-    rotation_delta = camera_r_base.T @ kabsch_r_base
+    rotation_delta = pnp_r_base.T @ kabsch_r_base
     rotation_crosscheck_error_deg = float(
         np.degrees(
             np.arccos(np.clip((np.trace(rotation_delta) - 1.0) / 2.0, -1.0, 1.0))
         )
     )
-
-    residuals = []
-    for robot_position, marker_t_camera in zip(
-        robot_positions, marker_vectors_camera
-    ):
-        predicted_marker = (
-            robot_position + camera_t_end + camera_r_base @ marker_t_camera
-        )
-        residuals.append(float(np.linalg.norm(predicted_marker - marker_t_base)))
 
     return EyeInHandCalibration(
         t_end_to_camera=transform,

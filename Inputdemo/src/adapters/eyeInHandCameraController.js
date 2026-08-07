@@ -75,6 +75,9 @@ export class EyeInHandCameraController {
   async pixelToBase({ calibrationFile, pixel, robotPose }) {
     return runBridge("pixel-to-base", { calibrationFile, pixel, robotPose });
   }
+  async cameraCenterOffset({ calibrationFile, robotPose }) {
+    return runBridge("camera-center-offset", { calibrationFile, robotPose });
+  }
   async captureBurst({ config, robotPose }) {
     const result = await runBridge("capture-burst", { ...config, robotPose });
     return { ...result, selectedFile: await imageFile(result.selected.path) };

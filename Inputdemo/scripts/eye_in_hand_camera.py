@@ -334,6 +334,31 @@ def pixel_to_base(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def camera_center_offset(payload: dict[str, Any]) -> dict[str, Any]:
+    """Offset to add to a target table point so the camera view centers on it.
+
+    Derived purely from calibration: casts the image-center ray from the given
+    robot Z, intersects the table plane, and reports (robot_xy - view_center_xy).
+    Replaces the old hand-tuned probe->camera offset.
+    """
+    robot_pose = require_pose(payload)
+    path = calibration_path(payload)
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    width, height = data.get("calibration", {}).get("resolution", [2448, 2048])
+    mapper = PixelToWorld(str(path), robot_pose=robot_pose)
+    center = mapper.pixel_to_table(float(width) / 2.0, float(height) / 2.0)
+    if center is None:
+        raise RuntimeError("Image-center ray does not intersect the calibrated table plane.")
+    dx = float(robot_pose["x"]) - float(center[0])
+    dy = float(robot_pose["y"]) - float(center[1])
+    return {
+        "ok": True,
+        "robotPose": robot_pose,
+        "viewCenter": {"x": float(center[0]), "y": float(center[1]), "z": float(center[2])},
+        "offset": {"dx": dx, "dy": dy},
+    }
+
+
 def health(payload: dict[str, Any]) -> dict[str, Any]:
     path = calibration_path(payload)
     status = calibration_status(payload)
@@ -378,6 +403,7 @@ def main() -> int:
         "capture-burst": capture_burst,
         "coarse-localize": coarse_localize,
         "pixel-to-base": pixel_to_base,
+        "camera-center-offset": camera_center_offset,
     }
     if action not in actions:
         raise ValueError(f"Unsupported camera action: {action}")

@@ -67,6 +67,11 @@ def _open_camera(session: dict) -> pylon.InstantCamera:
         camera.PixelFormat.SetValue(str(session["pixel_format"]))
         camera.ExposureTime.SetValue(float(session["exposure_us"]))
         camera.Gain.SetValue(float(session["gain"]))
+        ratios = session.get("white_balance", {}).get("balance_ratio")
+        if ratios:
+            for channel in ("Red", "Green", "Blue"):
+                camera.BalanceRatioSelector.SetValue(channel)
+                camera.BalanceRatio.SetValue(float(ratios[channel.lower()]))
         return camera
     except Exception:
         camera.Close()

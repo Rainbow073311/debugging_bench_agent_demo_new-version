@@ -1,12 +1,18 @@
 calibration:
   camera_model: Basler acA2440-75uc
   chessboard:
+    images_used: 58
     pattern: 9x6
     square_size_mm: 5.0
-  date: '2026-08-03T11:21:02.642907+08:00'
+  date: 2026-08-07-tilt-recalibrated
   exposure_us: 400000
   gain: 0
   pixel_format: BayerRG8
+  quality:
+    fx_fy_ratio: 1.0000928581952866
+    max_per_view_rmse_px: 0.9710149168968201
+    mean_per_view_rmse_px: 0.7194978964739832
+    rms_px: 0.7254970193533236
   resolution:
   - 2448
   - 2048
@@ -16,33 +22,62 @@ calibration:
     offset_y: 0
     width: 2448
   serial: '24771618'
-  session: calibration_sessions\basler_intrinsics_refocused_20260803_103800
+  session: calibration_sessions\intrinsics_20260806_183138
   status: calibrated
+  white_balance:
+    mode: fixed
+    balance_ratio:
+      red: 1.7837
+      green: 1.0
+      blue: 2.1951
+    note: one-shot auto WB on white calibration paper, 2026-08-07
 extrinsics:
   T_end_to_camera:
     R:
-    - - 0.9977468806188616
-      - -0.05847858279487168
-      - -0.03288491401286939
-    - - -0.059165633036938996
-      - -0.998041305413804
-      - -0.020321923020438396
-    - - -0.03163210525192317
-      - 0.022221792056755695
-      - -0.9992525215755611
+    - - 0.9858515086851904
+      - -0.16571547881021745
+      - -0.025202835273711924
+    - - -0.16567842110323378
+      - -0.9861733845790078
+      - 0.00356599617557016
+    - - -0.025445306126533496
+      - 0.0006600232458218267
+      - -0.9996759978940393
     t_mm:
-    - -5.670062704908113
-    - 72.11071131550314
-    - 51.85328990041976
+    - 4.448339910240872
+    - 65.47599935041838
+    - 51.6811821706751
   camera_orientation_source: fixed_calibration
+  dataset: calibration\calibration_sessions\extrinsics_20260807_115950\dataset.json
   date: recalibrated-7.687
-  method: known-board PnP + XYZ-constrained hand-eye
+  method: known-board PnP + XYZ-constrained hand-eye (wide lattice)
   mount_mode: eye_in_hand_xyz
-  num_samples: 12
+  num_samples: 27
   quality:
-    max_marker_residual_mm: 0.7346101085581151
-    mean_marker_residual_mm: 0.4035672387593015
-    rotation_crosscheck_error_deg: 2.4693778844368834
+    board_probe:
+      orientation_repaired: true
+      plane_tilt_deg: 1.1110500021210894
+      probe_z_spread_mm: 0.907999999999987
+      x_span_mm: 40.5331380046006
+      y_span_mm: 24.956160652231745
+    holdout:
+      max_xy_mm: 1.2765996441481753
+      mean_xy_mm: 1.0025988363143234
+      mean_xyz_mm: 1.2971400129966295
+      samples:
+      - xy_mm: 0.5313184960985339
+        xyz_mm: 1.3155875681160643
+      - xy_mm: 1.2765996441481753
+        xyz_mm: 1.3479154575918852
+      - xy_mm: 1.1998783686962609
+        xyz_mm: 1.2279170132819395
+    max_marker_residual_mm: 1.5306311028055541
+    mean_marker_residual_mm: 0.8964063420935211
+    robot_xyz_span_mm:
+    - 24.730030999999997
+    - 36.000004000000004
+    - 130.000011
+    rotation_crosscheck_error_deg: 3.071495411577922
   robot_axes_ignored:
   - r
   robot_axes_used:
@@ -53,27 +88,69 @@ extrinsics:
   transform_convention: T_end_to_camera maps camera coords into end-effector coords
 intrinsics:
   camera_matrix:
-  - - 3559.222163909295
+  - - 3575.7484787692983
     - 0.0
-    - 1231.6472058714237
+    - 1287.6066859999773
   - - 0.0
-    - 3552.5399801512363
-    - 876.2052361946281
+    - 3575.416472048306
+    - 945.6274118912127
   - - 0.0
     - 0.0
     - 1.0
   dist_coeffs:
-  - -0.19427319016464503
-  - 0.3934392995869
-  - 8.86046160984686e-05
-  - 0.0012158392859037024
-  - -1.4784485414719144
+  - - -0.14850519260538958
+    - -1.0901568987747579
+    - 1.7278020978542625e-06
+    - -0.005566640877968965
+    - 6.98626315792984
 runtime_safety:
-  close_capture_z_mm: -49.20000000000002
+  close_capture_z_mm: -49.25975
   fixed_r_deg: 7.687
   global_capture_z_mm: 50.0
   safe_height_z_mm: 50.0
+  valid_robot_xyz_max:
+  - 346.380014
+  - -28.689999
+  - 50.000019
+  valid_robot_xyz_min:
+  - 321.649983
+  - -64.690003
+  - -79.999992
 table_homography:
-  table_z_mm: -161.20000000000002
+  table_z_mm: -161.25975
 xy_pose_correction:
-  status: uncalibrated
+  status: disabled
+  features:
+  - raw_x
+  - raw_y
+  - robot_x
+  - robot_y
+  - robot_z
+  - constant
+  coefficients:
+  - - 1.014076700002669
+    - 0.026983505230018003
+  - - -0.10644690304796034
+    - 1.0002724594924421
+  - - 0.0
+    - 0.0
+  - - 0.0
+    - 0.0
+  - - 0.0
+    - 0.0
+  - - -6.082823203899507
+    - -9.675604740185081
+  fixed_r_deg: 7.687
+  r_tolerance_deg: 180.0
+  valid_robot_xyz_min:
+  - 290.0
+  - -100.0
+  - -140.0
+  valid_robot_xyz_max:
+  - 380.0
+  - 60.0
+  - 60.0
+  note: affine correction on raw table XY only (robot-frame skew); robot pose coefficients
+    are zero; R is irrelevant
+  disabled_reason: extrapolates ~-6mm X outside chessboard region; hurts PCB probing.
+    Keep coeffs for reference.

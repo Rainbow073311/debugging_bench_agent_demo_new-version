@@ -412,9 +412,24 @@ async function finalizeSplitServiceRun(parentRunId) {
       const ultraCloseZ = -115;
       let refinedBp = bp;
       try {
-        // Camera offset from probe (empirically calibrated): probe + (45, -30) centers camera on TP
-        const camDx = 45;
-        const camDy = -30;
+        // Camera-vs-probe offset computed from the eye-in-hand calibration:
+        // ask the bridge where the image-center ray lands from this Z, then
+        // shift the robot so that point coincides with the TP.
+        let camDx = 0;
+        let camDy = -50; // legacy fallback if the calibration query fails
+        try {
+          const trialPose = { x: bp.x, y: bp.y, z: ultraCloseZ, r: fixedR };
+          const centerOffset = await serviceCameraController.cameraCenterOffset({
+            calibrationFile: run.execution.camera.calibrationFile,
+            robotPose: trialPose
+          });
+          if (Number.isFinite(centerOffset?.offset?.dx) && Number.isFinite(centerOffset?.offset?.dy)) {
+            camDx = centerOffset.offset.dx;
+            camDy = centerOffset.offset.dy;
+          }
+        } catch (e) {
+          appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} camera-center-offset failed, using legacy (0,-50): ${e.message}\n`);
+        }
         const camX = bp.x + camDx;
         const camY = bp.y + camDy;
         appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} ultra-close: moving camera via probe (${camX.toFixed(1)},${camY.toFixed(1)},${ultraCloseZ})\n`);
@@ -465,11 +480,22 @@ async function finalizeSplitServiceRun(parentRunId) {
                 message: `${tpId} refined: pad=(${ultraPixel[0]},${ultraPixel[1]})`
               });
               appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} ultra VLM text=(${textPixel}) pad=(${ultraPixel})\n`);
-              const ultraProjection = await projectEyeInHandVlmPixel({ cameraExecution: { ...run.execution.camera, selectedImage: { robotPose: camReach.pose } }, cameraController: serviceCameraController, pixel: ultraPixel });
-              if (ultraProjection?.basePoint) {
-                refinedBp = ultraProjection.basePoint;
-                try { appendFileSync(`${workspace}/ultra_refined_result.json`, JSON.stringify({ pixel: ultraPixel, text_pixel: textPixel, basePoint: refinedBp, source: "vlm_text_pad_refinement", cameraZ: ultraCloseZ, vlm_raw: vlmResult.vlm_raw }, null, 2)); } catch {}
-                appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} refined basePoint: x=${refinedBp.x.toFixed(2)} y=${refinedBp.y.toFixed(2)}\n`);
+              try {
+                const ultraProjection = await projectEyeInHandVlmPixel({ cameraExecution: { ...run.execution.camera, selectedImage: { robotPose: camReach.pose } }, cameraController: serviceCameraController, pixel: ultraPixel });
+                if (ultraProjection?.basePoint) {
+                  refinedBp = ultraProjection.basePoint;
+                  try { appendFileSync(`${workspace}/ultra_refined_result.json`, JSON.stringify({ pixel: ultraPixel, text_pixel: textPixel, basePoint: refinedBp, source: "vlm_text_pad_refinement", cameraZ: ultraCloseZ, vlm_raw: vlmResult.vlm_raw }, null, 2)); } catch {}
+                  appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} refined basePoint: x=${refinedBp.x.toFixed(2)} y=${refinedBp.y.toFixed(2)}\n`);
+                }
+              } catch (projErr) {
+                // Keep coarse bp and continue to probe descent; do not abort the whole ultra-close path.
+                appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} ultra pad projection failed, keep coarse bp: ${projErr.message}\n`);
+                appendRunEvent(parentRunId, "camera.ultra_projection_failed", {
+                  tp_id: tpId,
+                  pad_pixel: ultraPixel,
+                  error: projErr.message,
+                  message: `${tpId} pad found but projection failed; using coarse basePoint for descent`
+                });
               }
             } else {
               appendRunEvent(parentRunId, "camera.ultra_vlm_failed", {
