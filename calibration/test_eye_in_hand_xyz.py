@@ -142,7 +142,7 @@ def test_translation_fit_rejects_degenerate_samples():
         )
 
 
-def test_live_camera_pose_uses_xyz_but_not_r():
+def test_live_camera_pose_uses_j1_but_not_flange_r():
     end_camera = make_transform(DOWNWARD_ROTATION, [10.0, 20.0, 30.0])
     first = compose_base_to_camera(
         {"x": 100.0, "y": 200.0, "z": 300.0, "r": 0.0}, end_camera
@@ -153,8 +153,19 @@ def test_live_camera_pose_uses_xyz_but_not_r():
     different_z = compose_base_to_camera(
         {"x": 100.0, "y": 200.0, "z": 305.0, "r": 173.2}, end_camera
     )
+    # Same TCP XY => same atan2 J1; flange R must not affect camera pose.
     np.testing.assert_allclose(first, different_r)
     np.testing.assert_allclose(different_z[:3, 3] - first[:3, 3], [0.0, 0.0, 5.0])
+
+    # Different J1 rotates the end-frame camera offset in base XY.
+    along_x = compose_base_to_camera(
+        {"x": 300.0, "y": 0.0, "z": 300.0, "j1_deg": 0.0}, end_camera
+    )
+    np.testing.assert_allclose(along_x[:3, 3], [310.0, 20.0, 330.0], atol=1e-8)
+    rotated = compose_base_to_camera(
+        {"x": 300.0, "y": 0.0, "z": 300.0, "j1_deg": 90.0}, end_camera
+    )
+    np.testing.assert_allclose(rotated[:3, 3], [280.0, 10.0, 330.0], atol=1e-8)
 
 
 def test_pixel_projection_requires_frame_pose_and_intersects_table(tmp_path):
@@ -170,7 +181,8 @@ def test_pixel_projection_requires_frame_pose_and_intersects_table(tmp_path):
         240,
         robot_pose={"x": 100.0, "y": 200.0, "z": 300.0, "r": 999.0},
     )
-    np.testing.assert_allclose(center, [110.0, 220.0, 0.0], atol=1e-8)
+    # J1=atan2(200,100); optical center = TCP + Rz(J1)@t_ec on table plane.
+    np.testing.assert_allclose(center, [86.58359214, 217.88854382, 0.0], atol=1e-6)
 
     same_center = converter.pixel_to_table(
         320,
@@ -178,6 +190,13 @@ def test_pixel_projection_requires_frame_pose_and_intersects_table(tmp_path):
         robot_pose={"x": 100.0, "y": 200.0, "z": 300.0, "r": -999.0},
     )
     np.testing.assert_allclose(center, same_center, atol=1e-8)
+
+    explicit_j1 = converter.pixel_to_table(
+        320,
+        240,
+        robot_pose={"x": 300.0, "y": 0.0, "z": 300.0, "j1_deg": 0.0},
+    )
+    np.testing.assert_allclose(explicit_j1, [310.0, 20.0, 0.0], atol=1e-8)
 
 
 def test_pose_aware_xy_correction_requires_fixed_r_and_valid_range(tmp_path):
@@ -210,7 +229,8 @@ def test_pose_aware_xy_correction_requires_fixed_r_and_valid_range(tmp_path):
         240,
         robot_pose={"x": 100.0, "y": 200.0, "z": 300.0, "r": 7.686619},
     )
-    np.testing.assert_allclose(corrected, [112.0, 217.0, 0.0], atol=1e-8)
+    # Raw optical center under J1 model, plus affine constant [2, -3].
+    np.testing.assert_allclose(corrected, [88.58359214, 214.88854382, 0.0], atol=1e-6)
 
     with pytest.raises(ValueError, match="robot R differs"):
         converter.pixel_to_table(
@@ -229,7 +249,7 @@ def test_legacy_fixed_camera_transform_is_rejected(tmp_path):
         PixelToWorld(config)
 
 
-def test_height_estimator_camera_position_uses_xyz_and_ignores_r(tmp_path):
+def test_height_estimator_camera_position_uses_j1_and_ignores_flange_r(tmp_path):
     config = tmp_path / "camera.yaml"
     write_config(config, calibrated_extrinsics())
     estimator = HeightEstimator(config)
@@ -237,8 +257,11 @@ def test_height_estimator_camera_position_uses_xyz_and_ignores_r(tmp_path):
     first = estimator.cam_t.copy()
     estimator.set_robot_pose({"x": 100, "y": 200, "z": 300, "r": 173})
     np.testing.assert_allclose(estimator.cam_t, first)
+    np.testing.assert_allclose(first, [86.58359214, 217.88854382, 330.0], atol=1e-6)
     estimator.set_robot_pose({"x": 100, "y": 200, "z": 305, "r": -173})
     np.testing.assert_allclose(estimator.cam_t - first, [0, 0, 5])
+    estimator.set_robot_pose({"x": 300, "y": 0, "z": 300, "j1_deg": 0})
+    np.testing.assert_allclose(estimator.cam_t, [310.0, 20.0, 330.0], atol=1e-8)
     height = estimator.estimate(
         {"x": 150.0, "y": 260.0, "pixel_area": 1000},
         [(0, 0)] * 10,

@@ -107,6 +107,10 @@ def require_pose(payload: dict[str, Any]) -> dict[str, float]:
         clean[key] = value
     if "r" in pose:
         clean["r"] = float(pose["r"])
+    for key in ("j1_deg", "j1"):
+        if key in pose and pose[key] is not None:
+            clean["j1_deg"] = float(pose[key])
+            break
     return clean
 
 
@@ -334,14 +338,70 @@ def pixel_to_base(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _load_locked_camera_center_offset() -> dict[str, Any] | None:
+    """Prefer calibration/camera_center_offset.json (50 mm LOOK fit)."""
+    locked = REPO_ROOT / "calibration" / "camera_center_offset.json"
+    if locked.exists():
+        data = json.loads(locked.read_text(encoding="utf-8"))
+        if data.get("status") in ("calibrated", "approx_calibrated"):
+            return {
+                "radius_xy_mm": float(data["radius_xy_mm"]),
+                "delta_deg": float(data["delta_deg"]),
+                "source": data.get("source"),
+                "path": str(locked),
+            }
+    path = REPO_ROOT / "calibration" / "camera_config.yaml"
+    if path.exists():
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        section = data.get("camera_center_offset") or {}
+        if section.get("status") in ("calibrated", "approx_calibrated"):
+            return {
+                "radius_xy_mm": float(section["radius_xy_mm"]),
+                "delta_deg": float(section["delta_deg"]),
+                "source": section.get("source"),
+                "path": str(path),
+            }
+    return None
+
+
 def camera_center_offset(payload: dict[str, Any]) -> dict[str, Any]:
     """Offset to add to a target table point so the camera view centers on it.
 
-    Derived purely from calibration: casts the image-center ray from the given
-    robot Z, intersects the table plane, and reports (robot_xy - view_center_xy).
-    Replaces the old hand-tuned probe->camera offset.
+    Prefer locked J1 tangential model from camera_center_offset.json
+    (50 mm LOOK / optical-center endpoints). Fallback: image-center ray vs
+    table from eye-in-hand extrinsics.
     """
+    import math
+
     robot_pose = require_pose(payload)
+    locked = _load_locked_camera_center_offset()
+    if locked is not None:
+        x = float(robot_pose["x"])
+        y = float(robot_pose["y"])
+        j1_deg = math.degrees(math.atan2(y, x))
+        # Iterate once so J1 matches the TCP we would command near this target.
+        for _ in range(6):
+            ang = math.radians(j1_deg + locked["delta_deg"])
+            cam_dx = locked["radius_xy_mm"] * math.sin(ang)
+            cam_dy = -locked["radius_xy_mm"] * math.cos(ang)
+            # TCP = target - cam_offset  =>  add (-cam_offset) to target
+            tcp_x = x - cam_dx
+            tcp_y = y - cam_dy
+            j1_deg = math.degrees(math.atan2(tcp_y, tcp_x))
+        ang = math.radians(j1_deg + locked["delta_deg"])
+        cam_dx = locked["radius_xy_mm"] * math.sin(ang)
+        cam_dy = -locked["radius_xy_mm"] * math.cos(ang)
+        return {
+            "ok": True,
+            "robotPose": robot_pose,
+            "model": "j1_tangential_xy",
+            "source": locked.get("source"),
+            "lockedFile": locked.get("path"),
+            "j1_deg": round(j1_deg, 4),
+            "cam_from_tcp": {"dx": cam_dx, "dy": cam_dy},
+            "offset": {"dx": -cam_dx, "dy": -cam_dy},
+        }
+
     path = calibration_path(payload)
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     width, height = data.get("calibration", {}).get("resolution", [2448, 2048])
@@ -354,6 +414,7 @@ def camera_center_offset(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
         "robotPose": robot_pose,
+        "model": "image_center_ray",
         "viewCenter": {"x": float(center[0]), "y": float(center[1]), "z": float(center[2])},
         "offset": {"dx": dx, "dy": dy},
     }

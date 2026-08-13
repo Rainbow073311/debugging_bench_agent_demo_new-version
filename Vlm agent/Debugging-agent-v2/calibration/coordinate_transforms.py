@@ -1,12 +1,13 @@
-"""Pixel/robot transforms for the project's XYZ-only eye-in-hand camera.
+"""Pixel/robot transforms for the project's J1 eye-in-hand camera.
 
 The live camera pose is recomputed for every image:
 
-    T_base_to_camera = T_base_to_end(X, Y, Z) @ T_end_to_camera
+    T_base_to_camera = Trans(TCP_xyz) @ Rz(J1) @ T_end_to_camera
 
-Robot R is intentionally ignored.  Z comes from the robot pose associated with
-the captured frame; this module does not command motion or replace the existing
-probe descent/threshold logic.
+J1 comes from ``pose.j1_deg`` / ``pose.j1`` when present, otherwise
+``atan2(TCP_y, TCP_x)``.  Flange R (J4) is intentionally ignored for the
+camera mount.  Z comes from the robot pose associated with the captured frame;
+this module does not command motion or replace probe descent/threshold logic.
 """
 
 from __future__ import annotations
@@ -19,9 +20,19 @@ import numpy as np
 import yaml
 
 try:
-    from .eye_in_hand_xyz import compose_base_to_camera, make_transform, robot_xyz
+    from .eye_in_hand_xyz import (
+        compose_base_to_camera,
+        j1_deg_from_pose,
+        make_transform,
+        robot_xyz,
+    )
 except ImportError:  # Direct execution: python calibration/coordinate_transforms.py
-    from eye_in_hand_xyz import compose_base_to_camera, make_transform, robot_xyz
+    from eye_in_hand_xyz import (
+        compose_base_to_camera,
+        j1_deg_from_pose,
+        make_transform,
+        robot_xyz,
+    )
 
 
 class PixelToWorld:
@@ -110,9 +121,14 @@ class PixelToWorld:
             self.set_robot_pose(robot_pose)
 
     def set_robot_pose(self, pose: Mapping[str, Any] | Sequence[float]):
-        """Bind frame XYZ; R is checked as a fixed-calibration safety guard."""
+        """Bind frame XYZ + J1; flange R checked only for XY-correction guard."""
         xyz = robot_xyz(pose)
-        self._robot_pose = {"x": xyz[0], "y": xyz[1], "z": xyz[2]}
+        self._robot_pose = {
+            "x": xyz[0],
+            "y": xyz[1],
+            "z": xyz[2],
+            "j1_deg": float(j1_deg_from_pose(pose)),
+        }
         if self.xy_pose_correction is not None:
             if not isinstance(pose, Mapping) or "r" not in pose:
                 raise ValueError("robot R is required for calibrated XY correction")
@@ -126,7 +142,12 @@ class PixelToWorld:
     def _resolve_robot_pose(self, robot_pose):
         if robot_pose is not None:
             xyz = robot_xyz(robot_pose)
-            resolved = {"x": xyz[0], "y": xyz[1], "z": xyz[2]}
+            resolved = {
+                "x": xyz[0],
+                "y": xyz[1],
+                "z": xyz[2],
+                "j1_deg": float(j1_deg_from_pose(robot_pose)),
+            }
             if self.xy_pose_correction is not None:
                 if not isinstance(robot_pose, Mapping) or "r" not in robot_pose:
                     raise ValueError("robot R is required for calibrated XY correction")
@@ -163,7 +184,7 @@ class PixelToWorld:
         return float(corrected[0]), float(corrected[1])
 
     def base_to_camera(self, robot_pose=None):
-        """Return the live ``T_base_to_camera``; robot R never participates."""
+        """Return live ``T_base_to_camera = Trans(TCP) @ Rz(J1) @ T_ec``."""
         return compose_base_to_camera(
             self._resolve_robot_pose(robot_pose), self.T_end_to_camera
         )

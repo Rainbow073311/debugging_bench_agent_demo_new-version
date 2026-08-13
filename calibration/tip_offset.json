@@ -1,0 +1,14 @@
+{
+  "status": "calibrated",
+  "model": "j1_tangential_xy",
+  "radius_xy_mm": 27.0,
+  "delta_deg": 6.15,
+  "z_mm": 0.0,
+  "formula": "dx = radius_xy_mm * sin(J1_deg + delta_deg); dy = -radius_xy_mm * cos(J1_deg + delta_deg)",
+  "convention": "tip_xy = TCP_xy + [dx, dy]; command TCP_xy via tcp_xy_from_tip (J1-consistent)",
+  "j1_proxy": "atan2(TCP_y, TCP_x) degrees on MG400",
+  "locked": true,
+  "locked_date": "2026-08-11",
+  "source": "50mm line fit P1/P2/P3/P4/P6/P7; delta_deg=6.15; radius=27mm XY",
+  "note": "Do not change without recalibration. Runtime Inputdemo must use this file."
+}

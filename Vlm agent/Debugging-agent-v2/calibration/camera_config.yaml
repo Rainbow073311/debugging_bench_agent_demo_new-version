@@ -24,53 +24,58 @@ calibration:
   serial: '24771618'
   session: calibration_sessions\intrinsics_20260806_183138
   status: calibrated
+  white_balance:
+    mode: fixed
+    balance_ratio:
+      red: 1.7837
+      green: 1.0
+      blue: 2.1951
+    note: one-shot auto WB on white calibration paper, 2026-08-07
 extrinsics:
   T_end_to_camera:
     R:
-    - - 0.9858515086851904
-      - -0.16571547881021745
-      - -0.025202835273711924
-    - - -0.16567842110323378
-      - -0.9861733845790078
-      - 0.00356599617557016
-    - - -0.025445306126533496
-      - 0.0006600232458218267
-      - -0.9996759978940393
+    - - 0.9987492369597902
+      - -0.0010702202630909004
+      - -0.049988161606775494
+    - - -0.00024138299556471167
+      - -0.999862450760648
+      - 0.016583765952298393
+    - - -0.0499990340555307
+      - -0.016550957298586147
+      - -0.998612118094916
     t_mm:
-    - 4.448339910240872
-    - 65.47599935041838
-    - 51.6811821706751
+    - 7.9756
+    - 32.932
+    - 52.7227
   camera_orientation_source: fixed_calibration
   dataset: calibration\calibration_sessions\extrinsics_20260807_115950\dataset.json
-  date: recalibrated-7.687
-  method: known-board PnP + XYZ-constrained hand-eye (wide lattice)
+  date: '2026-08-13'
+  method: physical-TL PnP + J1 end-frame Kabsch (robust LOOK subset)
   mount_mode: eye_in_hand_xyz
   num_samples: 27
   quality:
-    board_probe:
-      orientation_repaired: true
-      plane_tilt_deg: 1.1110500021210894
-      probe_z_spread_mm: 0.907999999999987
-      x_span_mm: 40.5331380046006
-      y_span_mm: 24.956160652231745
-    holdout:
-      max_xy_mm: 1.2765996441481753
-      mean_xy_mm: 1.0025988363143234
-      mean_xyz_mm: 1.2971400129966295
-      samples:
-      - xy_mm: 0.5313184960985339
-        xyz_mm: 1.3155875681160643
-      - xy_mm: 1.2765996441481753
-        xyz_mm: 1.3479154575918852
-      - xy_mm: 1.1998783686962609
-        xyz_mm: 1.2279170132819395
-    max_marker_residual_mm: 1.5306311028055541
-    mean_marker_residual_mm: 0.8964063420935211
-    robot_xyz_span_mm:
-    - 24.730030999999997
-    - 36.000004000000004
-    - 130.000011
-    rotation_crosscheck_error_deg: 3.071495411577922
+    n_looks: 10
+    j1_span_deg: 16.424
+    rms_mm: 1.019
+    mean_abs_mm: 0.994
+    max_mm: 1.23
+    dropped_looks:
+    - L13
+    - L14
+    - L5
+    - L9
+    validate_tip_vs_P_TL_mm: 0.936
+    tl_idx_choice:
+      L1: 0
+      L10: 0
+      L11: 0
+      L12: 0
+      L2: 0
+      L3: 0
+      L4: 0
+      L6: 0
+      L7: 0
+      L8: 0
   robot_axes_ignored:
   - r
   robot_axes_used:
@@ -78,7 +83,14 @@ extrinsics:
   - y
   - z
   status: calibrated
-  transform_convention: T_end_to_camera maps camera coords into end-effector coords
+  transform_convention: T_end_to_camera maps camera coords into J1-rotating end-effector
+    coords; T_base_cam = Trans(XYZ) @ Rz(J1) @ T_end_to_camera
+  j1_model: Trans(TCP) @ Rz(J1) @ T_end_to_camera
+  j1_source: pose.j1_deg or atan2(TCP_y, TCP_x)
+  locked: true
+  source_file: calibration/_extrinsic_recal.json
+  note: LOCKED — J1 eye-in-hand; tip hover validate err_vs_P_TL~0.94mm on 2026-08-13;
+    fit rms=1.019mm n=10 dropped=['L13', 'L14', 'L5', 'L9']
 intrinsics:
   camera_matrix:
   - - 3575.7484787692983
@@ -109,6 +121,22 @@ runtime_safety:
   - 321.649983
   - -64.690003
   - -79.999992
+tip_offset:
+  status: calibrated
+  locked: true
+  model: j1_tangential_xy
+  radius_xy_mm: 27.0
+  delta_deg: 6.15
+  z_mm: 0.0
+  formula: dx = radius_xy_mm * sin(J1_deg + delta_deg); dy = -radius_xy_mm * cos(J1_deg
+    + delta_deg)
+  convention: tip_xy = TCP_xy + [dx, dy]; command TCP via tip_offset.py / Inputdemo
+    tipOffset.js
+  j1_proxy: atan2(TCP_y, TCP_x) degrees on MG400
+  locked_file: calibration/tip_offset.json
+  source: 50mm line fit P1/P2/P3/P4/P6/P7 on 2026-08-11; delta_deg=6.15
+  note: LOCKED — runtime must apply this on probe hover/descent; do not freeze a single
+    dx,dy, evaluate from J1
 table_homography:
   table_z_mm: -161.25975
 xy_pose_correction:
@@ -147,3 +175,18 @@ xy_pose_correction:
     are zero; R is irrelevant
   disabled_reason: extrapolates ~-6mm X outside chessboard region; hurts PCB probing.
     Keep coeffs for reference.
+camera_center_offset:
+  status: calibrated
+  locked: true
+  model: j1_tangential_xy
+  radius_xy_mm: 34.0
+  delta_deg: -164.7
+  z_mm: 0.0
+  formula: dx = radius_xy_mm * sin(J1_deg + delta_deg); dy = -radius_xy_mm * cos(J1_deg
+    + delta_deg)
+  convention: cam_xy = TCP_xy + [dx, dy] when image-center ray hits table point; to
+    put optical center on target P, command TCP = P - [dx, dy] (J1-consistent)
+  j1_proxy: atan2(TCP_y, TCP_x) degrees on MG400
+  locked_file: calibration/camera_center_offset.json
+  source: 50mm LOOK fit P1-P4 2026-08-12T15:13:11; rms=0.1956mm j1_span=15.244deg
+  note: LOCKED — optical-center XY vs TCP; evaluate from J1; independent of tip_offset

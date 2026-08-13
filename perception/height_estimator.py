@@ -41,11 +41,23 @@ class HeightEstimator:
         self.cx_px, self.cy_px = K[0,2], K[1,2]
 
     def set_robot_pose(self, pose):
-        """Bind the camera position to frame XYZ; robot R is ignored."""
+        """Bind camera XY/Z via Trans(TCP)@Rz(J1)@t_ec; flange R ignored."""
         xyz = np.array([pose["x"], pose["y"], pose["z"]], dtype=np.float64)
         if not np.all(np.isfinite(xyz)):
             raise ValueError("robot XYZ pose must be finite")
-        self.cam_t = xyz + self.camera_offset
+        if "j1_deg" in pose and pose["j1_deg"] is not None:
+            j1 = float(pose["j1_deg"])
+        elif "j1" in pose and pose["j1"] is not None:
+            j1 = float(pose["j1"])
+        else:
+            j1 = math.degrees(math.atan2(float(xyz[1]), float(xyz[0])))
+        ang = math.radians(j1)
+        c, s = math.cos(ang), math.sin(ang)
+        ox, oy, oz = self.camera_offset
+        offset_base = np.array(
+            [c * ox - s * oy, s * ox + c * oy, oz], dtype=np.float64
+        )
+        self.cam_t = xyz + offset_base
 
     def estimate(self, obstacle, blob_pixels, robot_pose=None):
         """估算障碍物高度 (mm) — 经验法: 像素面积 × 距离补偿"""

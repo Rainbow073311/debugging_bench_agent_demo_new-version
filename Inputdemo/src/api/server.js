@@ -28,6 +28,7 @@ import { executeProbeSignalSearch } from "../agent/probeSignalSearch.js";
 import { executeEyeInHandCaptureWorkflow } from "../agent/eyeInHandCaptureWorkflow.js";
 import { EyeInHandCameraController } from "../adapters/eyeInHandCameraController.js";
 import { projectEyeInHandVlmPixel } from "../agent/calibratedVisionTarget.js";
+import { tipTargetToTcpPose } from "../domain/tipOffset.js";
 import { evaluateMg400PoseReachability } from "../domain/mg400Reachability.js";
 import { PROBE_SIGNAL_SEARCH_CONFIG } from "../domain/probeSignalSearchConfig.js";
 import { readEyeInHandCaptureConfig } from "../domain/eyeInHandCaptureConfig.js";
@@ -510,12 +511,31 @@ async function finalizeSplitServiceRun(parentRunId) {
         appendFileSync("debug_eye_in_hand.log", `${new Date().toISOString()} ultra-close failed: ${e.message}\n`);
       }
 
-      // Compute hover and minimum Z — start from fixed height, descend to PCB
+      // Compute hover and minimum Z — start from fixed height, descend to PCB.
+      // refinedBp is the TIP target in base; convert to TCP using locked tip_offset.
       const safeHoverZ = -120;
       const minimumZ = refinedBp.z - eyeInHandProbeMarginMm;
+      const tipHoverPose = { x: refinedBp.x, y: refinedBp.y, z: safeHoverZ, r: fixedR };
+      const tipToTcp = tipTargetToTcpPose(tipHoverPose);
+      appendFileSync(
+        "debug_eye_in_hand.log",
+        `${new Date().toISOString()} tip_offset locked: tip=(${refinedBp.x.toFixed(2)},${refinedBp.y.toFixed(2)}) ` +
+          `-> TCP=(${tipToTcp.pose.x.toFixed(2)},${tipToTcp.pose.y.toFixed(2)}) ` +
+          `offset=(${tipToTcp.offset.dx.toFixed(2)},${tipToTcp.offset.dy.toFixed(2)}) ` +
+          `J1≈${tipToTcp.j1_deg.toFixed(2)} δ=${tipToTcp.params.delta_deg}\n`
+      );
+      appendRunEvent(parentRunId, "robot.tip_offset_applied", {
+        tipXy: { x: refinedBp.x, y: refinedBp.y },
+        tcpXy: tipToTcp.tcpXy,
+        offset: tipToTcp.offset,
+        j1_deg: tipToTcp.j1_deg,
+        delta_deg: tipToTcp.params.delta_deg,
+        radius_xy_mm: tipToTcp.params.radius_xy_mm,
+        errMm: tipToTcp.errMm
+      });
 
-      // Check reachability and get adjusted pose (use refined basePoint)
-      const hoverPose = { x: refinedBp.x, y: refinedBp.y, z: safeHoverZ, r: fixedR };
+      // Check reachability on TCP command pose (flange), not tip.
+      const hoverPose = { ...tipToTcp.pose };
       const reachability = evaluateMg400PoseReachability(hoverPose, { allowAdjustment: true });
       if (!reachability.reachable) {
         run.error = `Calibrated probe hover pose is unreachable: ${reachability.message}`;

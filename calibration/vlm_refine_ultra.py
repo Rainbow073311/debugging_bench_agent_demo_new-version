@@ -173,85 +173,230 @@ def ask_vlm_for_text_center_in_roi(roi_bgr: np.ndarray, tp_id: str
 # Step 4 — OpenCV detects silver pads within ROI
 # ---------------------------------------------------------------------------
 
-def detect_pads_in_roi(roi_gray: np.ndarray) -> list[dict]:
-    """Detect silver pads within a grayscale ROI crop.
-    Returns list of {"center": (cx, cy), "radius": r, "method": "circle"|"contour"}
-    in ROI-local coordinates.
-    """
-    candidates = []
+def _local_pad_quality(
+    gray: np.ndarray, cx: float, cy: float, radius: float
+) -> tuple[float, float]:
+    """Return (disk_mean, contrast=disk-annulus). Higher contrast => likelier real pad."""
+    h, w = gray.shape[:2]
+    r = int(round(max(4.0, min(float(radius), 22.0))))
+    x0, y0 = int(round(cx)), int(round(cy))
+    if not (r <= x0 < w - r and r <= y0 < h - r):
+        return 0.0, -1e9
+    yy, xx = np.ogrid[-r : r + 1, -r : r + 1]
+    disk = xx * xx + yy * yy <= r * r
+    ring = (xx * xx + yy * yy <= (2 * r) * (2 * r)) & (~disk)
+    patch = gray[y0 - r : y0 + r + 1, x0 - r : x0 + r + 1]
+    if patch.shape[:2] != disk.shape:
+        return 0.0, -1e9
+    disk_vals = patch[disk]
+    ring_vals = patch[ring]
+    if disk_vals.size < 8 or ring_vals.size < 8:
+        return 0.0, -1e9
+    disk_mean = float(disk_vals.mean())
+    contrast = disk_mean - float(ring_vals.mean())
+    return disk_mean, contrast
 
-    # --- HoughCircles for circular pads ---
+
+def _keep_pad_candidate(
+    gray: np.ndarray, cand: dict, *, min_contrast: float = 6.0, min_mean: float = 55.0
+) -> dict | None:
+    """Drop Hough false circles that sit on dark parts / flat soldermask."""
+    cx, cy = float(cand["center"][0]), float(cand["center"][1])
+    radius = float(cand.get("radius", 8.0))
+    mean, contrast = _local_pad_quality(gray, cx, cy, radius)
+    if contrast < min_contrast or mean < min_mean:
+        return None
+    out = dict(cand)
+    out["mean"] = mean
+    out["contrast"] = contrast
+    return out
+
+
+def detect_pads_in_roi(roi_gray: np.ndarray) -> list[dict]:
+    """Detect silver-like pads; filter Hough false positives by local contrast."""
+    candidates: list[dict] = []
+
     blurred = cv2.GaussianBlur(roi_gray, (9, 9), 2)
     circles = cv2.HoughCircles(
-        blurred, cv2.HOUGH_GRADIENT, dp=1.2, minDist=15,
-        param1=50, param2=28, minRadius=6, maxRadius=60,
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=18,
+        param1=55,
+        param2=32,
+        minRadius=5,
+        maxRadius=28,
     )
     if circles is not None:
         for c in circles[0]:
-            candidates.append({
+            raw = {
                 "center": (float(c[0]), float(c[1])),
                 "radius": float(c[2]),
                 "method": "circle",
-            })
+            }
+            kept = _keep_pad_candidate(roi_gray, raw, min_contrast=7.0, min_mean=60.0)
+            if kept is not None:
+                candidates.append(kept)
 
-    # --- Contour-based for rectangular/oval pads ---
-    _, bright = cv2.threshold(roi_gray, 170, 255, cv2.THRESH_BINARY)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, kernel)
+    blur = cv2.GaussianBlur(roi_gray, (5, 5), 0)
+    thr = max(float(np.percentile(blur, 92)), float(blur.mean() + 25))
+    _, bright = cv2.threshold(blur, thr, 255, cv2.THRESH_BINARY)
+    bright = cv2.morphologyEx(
+        bright, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    )
     contours, _ = cv2.findContours(bright, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 40 or area > 6000:
+        if area < 30 or area > 900:
             continue
         peri = cv2.arcLength(cnt, True)
-        if peri < 8:
+        if peri < 10:
             continue
         circularity = 4 * np.pi * area / (peri * peri) if peri > 0 else 0
-        if circularity < 0.25:
+        if circularity < 0.45:
             continue
         M = cv2.moments(cnt)
         if M["m00"] < 1e-6:
             continue
         cx = M["m10"] / M["m00"]
         cy = M["m01"] / M["m00"]
-        if not any(np.hypot(cx - e["center"][0], cy - e["center"][1]) < 12
-                   for e in candidates):
-            candidates.append({
-                "center": (float(cx), float(cy)),
-                "radius": float(np.sqrt(area / np.pi)),
-                "method": "contour",
-            })
+        if any(np.hypot(cx - e["center"][0], cy - e["center"][1]) < 12 for e in candidates):
+            continue
+        raw = {
+            "center": (float(cx), float(cy)),
+            "radius": float(np.sqrt(area / np.pi)),
+            "method": "contour",
+        }
+        kept = _keep_pad_candidate(roi_gray, raw, min_contrast=5.0, min_mean=55.0)
+        if kept is not None:
+            candidates.append(kept)
     return candidates
+
+
+TEXT_HALF_W = 40
+TEXT_HALF_H = 16
+MIN_GAP_ABOVE_PX = 18
+MAX_GAP_ABOVE_PX = 48
+MAX_DX_FROM_TEXT = 36
+PREFERRED_DY_ABOVE = 32
+# Soft prior relative to detected text center (not absolute pixels):
+# TP copper usually sits a bit right of the text-box center.
+PREFERRED_DX_RIGHT = 12
+
+
+def _in_text_box(cx: float, cy: float, tx_cx: float, tx_cy: float) -> bool:
+    return (
+        abs(cx - tx_cx) <= TEXT_HALF_W
+        and abs(cy - tx_cy) <= TEXT_HALF_H
+    )
+
+
+def detect_pads_above_text(
+    roi_gray: np.ndarray, text_center_roi: tuple[int, int]
+) -> list[dict]:
+    """Candidates in the strip just above the TP label (contrast-filtered)."""
+    tx_cx, tx_cy = int(text_center_roi[0]), int(text_center_roi[1])
+    h, w = roi_gray.shape[:2]
+    y1 = max(0, tx_cy - MAX_GAP_ABOVE_PX)
+    y2 = max(0, tx_cy - MIN_GAP_ABOVE_PX)
+    x1 = max(0, tx_cx - 18)
+    x2 = min(w, tx_cx + MAX_DX_FROM_TEXT)
+    if y2 <= y1 + 3 or x2 <= x1 + 3:
+        return []
+
+    band = roi_gray[y1:y2, x1:x2]
+    blur = cv2.GaussianBlur(band, (5, 5), 0)
+    thr = float(np.percentile(blur, 82))
+    _, mask = cv2.threshold(blur, max(thr, float(blur.mean() + 10)), 255, cv2.THRESH_BINARY)
+    mask = cv2.morphologyEx(
+        mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    )
+    n, _labels, stats, cents = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
+    out: list[dict] = []
+    for i in range(1, n):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area < 30 or area > 350:
+            continue
+        bw = int(stats[i, cv2.CC_STAT_WIDTH])
+        bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+        if bw < 5 or bh < 5 or max(bw, bh) / max(min(bw, bh), 1) > 2.2:
+            continue
+        cx = float(cents[i][0]) + x1
+        cy = float(cents[i][1]) + y1
+        raw = {
+            "center": (cx, cy),
+            "radius": float(np.sqrt(area / np.pi)),
+            "method": "above_text_blob",
+        }
+        kept = _keep_pad_candidate(roi_gray, raw, min_contrast=4.5, min_mean=50.0)
+        if kept is not None:
+            out.append(kept)
+    return out
 
 
 def find_best_pad(candidates: list[dict], text_center_roi: tuple[int, int]
                   ) -> tuple[int, int] | None:
-    """Pick the nearest silver pad ABOVE the text center (smaller y in image coords).
-    Falls back to nearest overall if no pad is above.
-    """
+    """Pick pad just above TP text, mildly right of text center (relative prior)."""
     if not candidates:
         return None
 
-    tx_cx, tx_cy = text_center_roi
+    tx_cx, tx_cy = float(text_center_roi[0]), float(text_center_roi[1])
 
-    # Filter: only pads ABOVE text center (smaller y in image coords)
-    above = [(np.hypot(c["center"][0] - tx_cx, c["center"][1] - tx_cy), c)
-             for c in candidates if c["center"][1] < tx_cy]
+    def score(c: dict) -> float:
+        cx, cy = float(c["center"][0]), float(c["center"][1])
+        dx = cx - tx_cx
+        dy = tx_cy - cy
+        contrast = float(c.get("contrast", 0.0))
+        return (
+            1.6 * abs(dx - PREFERRED_DX_RIGHT)
+            + 1.6 * abs(dy - PREFERRED_DY_ABOVE)
+            + 0.5 * max(0.0, -dx)
+            - 0.8 * contrast  # real copper pops vs soldermask; weight contrast harder
+        )
 
-    if above:
-        above.sort(key=lambda x: x[0])
-        best = above[0][1]
-    else:
-        # Fallback: nearest overall, excluding text bbox area
-        valid = [c for c in candidates if not (
-            tx_cx - 35 <= c["center"][0] <= tx_cx + 35 and
-            tx_cy - 15 <= c["center"][1] <= tx_cy + 15
-        )]
-        if not valid:
-            valid = candidates
-        valid.sort(key=lambda c: np.hypot(c["center"][0] - tx_cx, c["center"][1] - tx_cy))
-        best = valid[0]
+    primary: list[dict] = []
+    for c in candidates:
+        cx, cy = float(c["center"][0]), float(c["center"][1])
+        if _in_text_box(cx, cy, tx_cx, tx_cy):
+            continue
+        dy = tx_cy - cy
+        if dy < MIN_GAP_ABOVE_PX or dy > MAX_GAP_ABOVE_PX:
+            continue
+        if abs(cx - tx_cx) > MAX_DX_FROM_TEXT:
+            continue
+        if cx < tx_cx - 8:
+            continue
+        primary.append(c)
 
+    if primary:
+        best = min(primary, key=score)
+        return (int(round(best["center"][0])), int(round(best["center"][1])))
+
+    text_top = tx_cy - TEXT_HALF_H
+    secondary: list[dict] = []
+    for c in candidates:
+        cx, cy = float(c["center"][0]), float(c["center"][1])
+        if _in_text_box(cx, cy, tx_cx, tx_cy):
+            continue
+        if cy >= text_top:
+            continue
+        if (tx_cy - cy) > MAX_GAP_ABOVE_PX * 1.25:
+            continue
+        if cx < tx_cx - 12 or cx > tx_cx + MAX_DX_FROM_TEXT * 1.2:
+            continue
+        secondary.append(c)
+
+    if secondary:
+        best = min(secondary, key=score)
+        return (int(round(best["center"][0])), int(round(best["center"][1])))
+
+    outside = [
+        c
+        for c in candidates
+        if not _in_text_box(float(c["center"][0]), float(c["center"][1]), tx_cx, tx_cy)
+    ]
+    pool = outside or candidates
+    best = min(pool, key=score)
     return (int(round(best["center"][0])), int(round(best["center"][1])))
 
 
@@ -404,8 +549,18 @@ def main():
         sys.exit(1)
     text_cx_roi, text_cy_roi = vlm_result
 
-    # Step 4 — OpenCV detects pads, select nearest above text
-    candidates_roi = detect_pads_in_roi(roi_gray)
+    # Step 4 — OpenCV pads near the text (do not keep whole-ROI false circles)
+    all_cands = detect_pads_in_roi(roi_gray)
+    all_cands.extend(detect_pads_above_text(roi_gray, (text_cx_roi, text_cy_roi)))
+    candidates_roi = []
+    for c in all_cands:
+        cx, cy = float(c["center"][0]), float(c["center"][1])
+        dy = text_cy_roi - cy
+        if dy < MIN_GAP_ABOVE_PX or dy > MAX_GAP_ABOVE_PX:
+            continue
+        if cx < text_cx_roi - 10 or cx > text_cx_roi + MAX_DX_FROM_TEXT:
+            continue
+        candidates_roi.append(c)
     pad_center_roi = find_best_pad(candidates_roi, (text_cx_roi, text_cy_roi))
 
     # Map to full-image coordinates

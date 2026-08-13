@@ -1,0 +1,517 @@
+{
+  "created": "2026-08-13T10:25:15",
+  "model": "T_base_cam = Trans(TCP_xyz) @ T_ec  (R ignored)",
+  "P_TL": [
+    327.5198529419522,
+    8.749494561894139,
+    -161.212189
+  ],
+  "touch": {
+    "time": "2026-08-13T10:43:07",
+    "tcp": {
+      "x": 321.731203,
+      "y": 35.121668,
+      "z": -161.212189,
+      "r": 3.549339
+    },
+    "angles": {
+      "j1": 6.230003,
+      "j2": 70.046646,
+      "j3": 73.271263,
+      "j4": -2.680664
+    },
+    "tip_params": {
+      "radius_xy_mm": 27.0,
+      "delta_deg": 6.15
+    },
+    "tip_xy": [
+      327.5198529419522,
+      8.749494561894139
+    ]
+  },
+  "looks": {
+    "L1": {
+      "time": "2026-08-13T10:44:03",
+      "tcp": {
+        "x": 319.999999,
+        "y": 19.999999,
+        "z": 50.0,
+        "r": 7.686999
+      },
+      "j1_deg": 3.576334,
+      "j2_deg": 16.102661,
+      "j3_deg": 21.573589,
+      "j4_deg": 4.110665,
+      "raw_tl_idx": 0,
+      "tl_px": [
+        1462.0849609375,
+        1614.1650390625
+      ],
+      "tl_cam_mm": [
+        12.937702166430789,
+        49.54802468640301,
+        262.3078646390211
+      ],
+      "pnp_rmse_px": 0.7637093663215637,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L1_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L1_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L2": {
+      "time": "2026-08-13T10:44:30",
+      "tcp": {
+        "x": 304.999987,
+        "y": 39.999999,
+        "z": 80.0,
+        "r": 7.687
+      },
+      "j1_deg": 7.471559,
+      "j2_deg": 9.065102,
+      "j3_deg": 12.882268,
+      "j4_deg": 0.215441,
+      "raw_tl_idx": 0,
+      "tl_px": [
+        1585.5887451171875,
+        1805.85107421875
+      ],
+      "tl_cam_mm": [
+        24.766919465215988,
+        71.20085914403454,
+        291.3393091354258
+      ],
+      "pnp_rmse_px": 0.6660845279693604,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L2_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L2_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L3": {
+      "time": "2026-08-13T10:44:53",
+      "tcp": {
+        "x": 335.0,
+        "y": 0.0,
+        "z": 80.0,
+        "r": 7.687
+      },
+      "j1_deg": 0.0,
+      "j2_deg": 17.893723,
+      "j3_deg": 10.791958,
+      "j4_deg": 7.687,
+      "raw_tl_idx": 0,
+      "tl_px": [
+        1286.0513916015625,
+        1303.6085205078125
+      ],
+      "tl_cam_mm": [
+        -0.09618493606372436,
+        29.634236239944705,
+        294.2491875932989
+      ],
+      "pnp_rmse_px": 0.7651150226593018,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L3_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L3_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L4": {
+      "time": "2026-08-13T10:45:23",
+      "tcp": {
+        "x": 310.00001,
+        "y": -15.000001,
+        "z": 100.0,
+        "r": 7.686999
+      },
+      "j1_deg": -2.770216,
+      "j2_deg": 8.862823,
+      "j3_deg": 6.272442,
+      "j4_deg": 10.457215,
+      "raw_tl_idx": 0,
+      "tl_px": [
+        1558.5736083984375,
+        1102.657958984375
+      ],
+      "tl_cam_mm": [
+        23.78073106008715,
+        13.859664895251376,
+        312.7288621403851
+      ],
+      "pnp_rmse_px": 0.7187738418579102,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L4_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L4_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L5": {
+      "time": "2026-08-13T10:45:56",
+      "tcp": {
+        "x": 340.000014,
+        "y": 45.000003,
+        "z": 90.0,
+        "r": 7.687
+      },
+      "j1_deg": 7.539445,
+      "j2_deg": 20.013451,
+      "j3_deg": 6.786334,
+      "j4_deg": 0.147555,
+      "raw_tl_idx": 53,
+      "tl_px": [
+        1176.173095703125,
+        1780.181396484375
+      ],
+      "tl_cam_mm": [
+        -9.417124187102361,
+        71.7984008526855,
+        303.66686997131455
+      ],
+      "pnp_rmse_px": 0.7198304533958435,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L5_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L5_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L6": {
+      "time": "2026-08-13T10:46:23",
+      "tcp": {
+        "x": 294.999994,
+        "y": 14.999998,
+        "z": 110.0,
+        "r": 7.687
+      },
+      "j1_deg": 2.910838,
+      "j2_deg": 3.668678,
+      "j3_deg": 3.553378,
+      "j4_deg": 4.776162,
+      "raw_tl_idx": 0,
+      "tl_px": [
+        1720.405029296875,
+        1448.8048095703125
+      ],
+      "tl_cam_mm": [
+        39.316787847927,
+        45.65559704846913,
+        321.21870140594456
+      ],
+      "pnp_rmse_px": 0.627373218536377,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L6_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L6_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L7": {
+      "time": "2026-08-13T10:47:08",
+      "tcp": {
+        "x": 344.999991,
+        "y": -25.000002,
+        "z": 100.000008,
+        "r": 7.686999
+      },
+      "j1_deg": -4.144624,
+      "j2_deg": 20.713608,
+      "j3_deg": 3.257073,
+      "j4_deg": 11.831623,
+      "raw_tl_idx": 0,
+      "tl_px": [
+        1156.56201171875,
+        1015.6586303710938
+      ],
+      "tl_cam_mm": [
+        -11.572637709990286,
+        6.276350702257591,
+        315.69727949984906
+      ],
+      "pnp_rmse_px": 0.8437807559967041,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L7_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L7_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L8": {
+      "time": "2026-08-13T10:47:42",
+      "tcp": {
+        "x": 314.999994,
+        "y": 55.000004,
+        "z": 95.0,
+        "r": 7.687
+      },
+      "j1_deg": 9.904183,
+      "j2_deg": 12.135529,
+      "j3_deg": 7.322865,
+      "j4_deg": -2.217184,
+      "raw_tl_idx": 0,
+      "tl_px": [
+        1417.5322265625,
+        1916.3453369140625
+      ],
+      "tl_cam_mm": [
+        11.545944409114375,
+        84.8953797748526,
+        307.27747190045534
+      ],
+      "pnp_rmse_px": 0.7233622074127197,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L8_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L8_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L9": {
+      "time": "2026-08-13T11:01:06",
+      "tcp": {
+        "x": 299.999992,
+        "y": 59.999995,
+        "z": 85.0,
+        "r": 7.687
+      },
+      "j1_deg": 11.309932,
+      "j2_deg": 8.181168,
+      "j3_deg": 11.343479,
+      "j4_deg": -3.622932,
+      "raw_tl_idx": 53,
+      "tl_px": [
+        1562.78759765625,
+        2037.381591796875
+      ],
+      "tl_cam_mm": [
+        23.482918511562737,
+        92.59758423825579,
+        296.4392783816944
+      ],
+      "pnp_rmse_px": 0.8377920985221863,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L9_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L9_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L10": {
+      "time": "2026-08-13T11:01:52",
+      "tcp": {
+        "x": 345.74934,
+        "y": -39.514211,
+        "z": 95.0,
+        "r": 7.687
+      },
+      "j1_deg": -6.519802,
+      "j2_deg": 21.551254,
+      "j3_deg": 4.596108,
+      "j4_deg": 14.206801,
+      "raw_tl_idx": 0,
+      "tl_px": [
+        1111.2808837890625,
+        862.3970947265625
+      ],
+      "tl_cam_mm": [
+        -15.26317872106841,
+        -7.130565398231886,
+        310.43723853986046
+      ],
+      "pnp_rmse_px": 0.8197320103645325,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L10_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L10_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L11": {
+      "time": "2026-08-13T11:02:29",
+      "tcp": {
+        "x": 290.000001,
+        "y": -10.0,
+        "z": 120.0,
+        "r": 7.687
+      },
+      "j1_deg": -1.974934,
+      "j2_deg": 1.843842,
+      "j3_deg": 0.365695,
+      "j4_deg": 9.661934,
+      "raw_tl_idx": 0,
+      "tl_px": [
+        1762.6243896484375,
+        1139.723876953125
+      ],
+      "tl_cam_mm": [
+        44.3863511048364,
+        18.143161529892406,
+        331.46773702549194
+      ],
+      "pnp_rmse_px": 0.6188533306121826,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L11_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L11_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L12": {
+      "time": "2026-08-13T11:02:59",
+      "tcp": {
+        "x": 346.764005,
+        "y": 29.304003,
+        "z": 110.0,
+        "r": 7.687
+      },
+      "j1_deg": 4.83042,
+      "j2_deg": 21.352882,
+      "j3_deg": -0.245713,
+      "j4_deg": 2.85658,
+      "raw_tl_idx": 0,
+      "tl_px": [
+        1149.2119140625,
+        1564.3499755859375
+      ],
+      "tl_cam_mm": [
+        -12.513420826098383,
+        56.650997988759656,
+        324.92071661297257
+      ],
+      "pnp_rmse_px": 0.7111768126487732,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L12_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L12_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L13": {
+      "time": "2026-08-13T11:03:59",
+      "tcp": {
+        "x": 324.999999,
+        "y": 69.999998,
+        "z": 100.0,
+        "r": 7.687
+      },
+      "j1_deg": 12.154942,
+      "j2_deg": 16.154564,
+      "j3_deg": 4.694718,
+      "j4_deg": -4.467942,
+      "raw_tl_idx": 53,
+      "tl_px": [
+        1253.643798828125,
+        2037.1856689453125
+      ],
+      "tl_cam_mm": [
+        -2.8569183708069597,
+        97.47677163576346,
+        312.97520396130415
+      ],
+      "pnp_rmse_px": 0.8148806095123291,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L13_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L13_marked.jpg",
+      "tl_origin_resolved": true
+    },
+    "L14": {
+      "time": "2026-08-13T11:04:32",
+      "tcp": {
+        "x": 330.000002,
+        "y": -50.000002,
+        "z": 115.0,
+        "r": 7.687
+      },
+      "j1_deg": -8.615648,
+      "j2_deg": 16.404083,
+      "j3_deg": -0.28922,
+      "j4_deg": 16.302649,
+      "raw_tl_idx": 0,
+      "tl_px": [
+        1257.8504638671875,
+        740.047607421875
+      ],
+      "tl_cam_mm": [
+        -2.606910998845705,
+        -18.802607328624692,
+        328.4860811438888
+      ],
+      "pnp_rmse_px": 0.8245590329170227,
+      "raw": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L14_raw.jpg",
+      "marked": "C:\\Users\\32825\\Desktop\\new_version_demo\\calibration\\_extrinsic_recal_session\\look_L14_marked.jpg",
+      "tl_origin_resolved": true
+    }
+  },
+  "fit": {
+    "n_looks": 10,
+    "R": [
+      [
+        0.9987492369597902,
+        -0.0010702202630909004,
+        -0.049988161606775494
+      ],
+      [
+        -0.00024138299556471167,
+        -0.999862450760648,
+        0.016583765952298393
+      ],
+      [
+        -0.0499990340555307,
+        -0.016550957298586147,
+        -0.998612118094916
+      ]
+    ],
+    "t_mm": [
+      7.9756,
+      32.932,
+      52.7227
+    ],
+    "rms_mm": 1.019,
+    "mean_abs_mm": 0.994,
+    "max_mm": 1.23,
+    "j1_span_deg": 16.424,
+    "tl_idx_choice": {
+      "L1": 0,
+      "L10": 0,
+      "L11": 0,
+      "L12": 0,
+      "L2": 0,
+      "L3": 0,
+      "L4": 0,
+      "L6": 0,
+      "L7": 0,
+      "L8": 0
+    },
+    "per_look": {
+      "L1": {
+        "err_mm": 1.206,
+        "raw_tl_idx": 0,
+        "j1_deg": 3.576
+      },
+      "L10": {
+        "err_mm": 1.069,
+        "raw_tl_idx": 0,
+        "j1_deg": -6.52
+      },
+      "L11": {
+        "err_mm": 1.23,
+        "raw_tl_idx": 0,
+        "j1_deg": -1.975
+      },
+      "L12": {
+        "err_mm": 1.008,
+        "raw_tl_idx": 0,
+        "j1_deg": 4.83
+      },
+      "L2": {
+        "err_mm": 0.78,
+        "raw_tl_idx": 0,
+        "j1_deg": 7.472
+      },
+      "L3": {
+        "err_mm": 0.927,
+        "raw_tl_idx": 0,
+        "j1_deg": 0.0
+      },
+      "L4": {
+        "err_mm": 0.471,
+        "raw_tl_idx": 0,
+        "j1_deg": -2.77
+      },
+      "L6": {
+        "err_mm": 1.219,
+        "raw_tl_idx": 0,
+        "j1_deg": 2.911
+      },
+      "L7": {
+        "err_mm": 1.108,
+        "raw_tl_idx": 0,
+        "j1_deg": -4.145
+      },
+      "L8": {
+        "err_mm": 0.92,
+        "raw_tl_idx": 0,
+        "j1_deg": 9.904
+      }
+    },
+    "dropped": [
+      "L13",
+      "L14",
+      "L5",
+      "L9"
+    ],
+    "model": "T_base_cam = Trans(TCP) @ Rz(J1) @ T_end_to_camera",
+    "note": "J1 end-frame fit; kept L10-L12; dropped flip/outlier L5/L9/L13/L14"
+  },
+  "status": "locked",
+  "tl_definition": "Camera-title side, left when reading Camera Calibration Checkerboard LTR",
+  "locked_at": "2026-08-13T11:23:38",
+  "locked_note": "User yes on tip hover Camera-title LEFT; J1 model T_ec locked"
+}

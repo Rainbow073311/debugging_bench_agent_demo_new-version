@@ -1,0 +1,46 @@
+{
+  "status": "calibrated",
+  "model": "j1_tangential_xy",
+  "radius_xy_mm": 34.0,
+  "delta_deg": -164.7,
+  "z_mm": 0.0,
+  "formula": "dx = radius_xy_mm * sin(J1_deg + delta_deg); dy = -radius_xy_mm * cos(J1_deg + delta_deg)",
+  "convention": "cam_xy = TCP_xy + [dx, dy] when image-center ray hits table point; to put optical center on target P, command TCP = P - [dx, dy] (J1-consistent)",
+  "j1_proxy": "atan2(TCP_y, TCP_x) degrees on MG400",
+  "locked": true,
+  "locked_date": "2026-08-12",
+  "source": "50mm LOOK fit P1-P4 2026-08-12T15:13:11; rms=0.1956mm j1_span=15.244deg",
+  "fit": {
+    "n_placements": 4,
+    "fit_rms_mm": 0.1956,
+    "mean_abs_err_mm": 0.1673,
+    "j1_span_deg": 15.244,
+    "per_placement": {
+      "P1": {
+        "dist_mm": 49.672,
+        "err_mm": -0.328,
+        "j1_a": -7.7333,
+        "j1_b": -6.0404
+      },
+      "P2": {
+        "dist_mm": 49.945,
+        "err_mm": -0.055,
+        "j1_a": 6.3869,
+        "j1_b": -1.3242
+      },
+      "P3": {
+        "dist_mm": 49.884,
+        "err_mm": -0.116,
+        "j1_a": 7.5106,
+        "j1_b": -1.6104
+      },
+      "P4": {
+        "dist_mm": 50.171,
+        "err_mm": 0.171,
+        "j1_a": -2.7382,
+        "j1_b": 5.8253
+      }
+    }
+  },
+  "note": "Independent of tip_offset. Runtime ultra-close uses this file."
+}

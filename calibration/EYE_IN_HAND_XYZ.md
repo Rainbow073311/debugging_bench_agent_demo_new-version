@@ -1,19 +1,21 @@
-# MG400 XYZ-only eye-in-hand calibration
+# MG400 J1 eye-in-hand calibration
 
 ## Scope
 
-The camera is treated as an eye-in-hand sensor whose position follows MG400
-`X`, `Y`, and `Z`. Robot `R` is not an input feature of the camera transform,
-but the physical arm must remain at the calibrated fixed value `7.686619`
-degrees. Runtime projection is rejected when R differs by more than 0.1 degree.
-
-For every captured frame:
+The camera is treated as an eye-in-hand sensor whose pose follows MG400
+`X`, `Y`, `Z` and base joint `J1`:
 
 ```text
 T_base_to_camera =
-T_base_to_end(robot X/Y/Z, identity rotation)
-× T_end_to_camera(fixed calibration)
+Trans(robot X/Y/Z)
+× Rz(J1)
+× T_end_to_camera(fixed calibration in the J1 / arm-head frame)
 ```
+
+`J1` is taken from `pose.j1_deg` / `pose.j1` when present, otherwise
+`atan2(TCP_y, TCP_x)`. Flange `R` (J4) is not an input of the camera mount
+transform. When the optional `xy_pose_correction` is enabled, runtime still
+rejects flange R outside the calibrated guard band.
 
 This branch does not replace the existing probe Z decision. Probe descent still
 starts from the configured fixed Z, moves in the configured small steps, stops

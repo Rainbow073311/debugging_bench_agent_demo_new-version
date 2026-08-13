@@ -1,18 +1,20 @@
-"""Constrained eye-in-hand geometry for the MG400 XYZ-only camera model.
+"""Eye-in-hand geometry for the MG400 with J1-rotating end frame.
 
 Transform convention
 --------------------
 ``T_a_to_b`` stores the pose of frame ``b`` expressed in frame ``a`` and maps
 homogeneous coordinates from frame ``b`` into frame ``a``.  Therefore:
 
-    T_base_to_camera = T_base_to_end @ T_end_to_camera
+    T_base_to_camera = Trans(TCP_xyz) @ Rz(J1) @ T_end_to_camera
 
-The installation used by this project has a fixed camera orientation.  Robot
-X/Y/Z translate the camera, while robot R is deliberately ignored.
+``T_end_to_camera`` is fixed in the arm-head / J1 frame.  Robot flange ``R``
+(J4) is deliberately ignored.  ``J1`` comes from ``pose.j1_deg`` / ``pose.j1``
+when present, otherwise ``atan2(TCP_y, TCP_x)`` (MG400 proxy).
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -88,7 +90,7 @@ def _fit_rigid_translation_model(
 
 
 def robot_xyz(pose: Mapping[str, Any] | Sequence[float]) -> np.ndarray:
-    """Return robot XYZ and intentionally ignore any R value."""
+    """Return robot XYZ and intentionally ignore any flange R value."""
     if isinstance(pose, Mapping):
         missing = [key for key in XYZ_KEYS if key not in pose]
         if missing:
@@ -102,6 +104,31 @@ def robot_xyz(pose: Mapping[str, Any] | Sequence[float]) -> np.ndarray:
     return _as_translation(values, "robot XYZ")
 
 
+def j1_deg_from_pose(pose: Mapping[str, Any] | Sequence[float]) -> float:
+    """Return J1 in degrees: explicit pose field, else atan2(TCP_y, TCP_x)."""
+    if isinstance(pose, Mapping):
+        for key in ("j1_deg", "j1"):
+            if key in pose and pose[key] is not None:
+                value = float(pose[key])
+                if not math.isfinite(value):
+                    raise ValueError(f"robot pose.{key} must be finite")
+                return value
+        xyz = robot_xyz(pose)
+        return math.degrees(math.atan2(float(xyz[1]), float(xyz[0])))
+    xyz = robot_xyz(pose)
+    return math.degrees(math.atan2(float(xyz[1]), float(xyz[0])))
+
+
+def rot_z(j1_deg: float) -> np.ndarray:
+    """Rotation about base/end Z by J1 (degrees)."""
+    angle = math.radians(float(j1_deg))
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    return np.array(
+        [[cos_a, -sin_a, 0.0], [sin_a, cos_a, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+
+
 def make_transform(rotation: np.ndarray, translation: Sequence[float]) -> np.ndarray:
     transform = np.eye(4, dtype=np.float64)
     transform[:3, :3] = _as_rotation(rotation, "rotation")
@@ -110,15 +137,15 @@ def make_transform(rotation: np.ndarray, translation: Sequence[float]) -> np.nda
 
 
 def robot_xyz_to_base_end(pose: Mapping[str, Any] | Sequence[float]) -> np.ndarray:
-    """Build ``T_base_to_end`` using translation only; R never participates."""
-    return make_transform(np.eye(3), robot_xyz(pose))
+    """Build ``T_base_to_end = Trans(TCP) @ Rz(J1)``; flange R never participates."""
+    return make_transform(rot_z(j1_deg_from_pose(pose)), robot_xyz(pose))
 
 
 def compose_base_to_camera(
     robot_pose: Mapping[str, Any] | Sequence[float],
     t_end_to_camera: np.ndarray,
 ) -> np.ndarray:
-    """Compose the live camera pose from robot XYZ and fixed mount extrinsics."""
+    """Compose live camera pose: ``Trans(TCP) @ Rz(J1) @ T_end_to_camera``."""
     transform = np.asarray(t_end_to_camera, dtype=np.float64)
     if transform.shape != (4, 4) or not np.all(np.isfinite(transform)):
         raise ValueError("T_end_to_camera must be a finite 4x4 matrix")
@@ -156,12 +183,11 @@ def estimate_eye_in_hand_xyz(
     minimum_axis_span_mm: float = 10.0,
     minimum_observability_ratio: float = 1e-3,
 ) -> EyeInHandCalibration:
-    """Estimate a fixed end-to-camera transform from a known stationary marker.
+    """Estimate fixed end-to-camera transform in the J1-rotating end frame.
 
-    Each sample contains robot XYZ and the ArUco marker pose measured in the
-    camera frame.  Marker position and orientation in the robot base frame must
-    be independently known.  Robot R is accepted in sample dictionaries but is
-    never used.
+    Each sample contains robot XYZ (and optional ``j1_deg``) plus the marker pose
+    in the camera.  Marker pose in base must be independently known.  Flange R is
+    accepted but never used.
     """
     if len(samples) < minimum_samples:
         raise ValueError(f"at least {minimum_samples} calibration samples are required")
@@ -173,6 +199,9 @@ def estimate_eye_in_hand_xyz(
 
     robot_positions = np.array(
         [robot_xyz(sample["robot_pose"]) for sample in samples], dtype=np.float64
+    )
+    j1_degs = np.array(
+        [j1_deg_from_pose(sample["robot_pose"]) for sample in samples], dtype=np.float64
     )
     spans = np.ptp(robot_positions, axis=0)
     if np.any(spans < minimum_axis_span_mm):
@@ -192,56 +221,59 @@ def estimate_eye_in_hand_xyz(
         ],
         dtype=np.float64,
     )
-    marker_offsets_from_end_base = marker_t_base - robot_positions
-    kabsch_r_base, _, singular_values = _fit_rigid_translation_model(
+    # Express (P_marker - TCP) in the J1 end frame.
+    marker_offsets_from_end = np.array(
+        [
+            rot_z(-j1) @ (marker_t_base - tcp)
+            for tcp, j1 in zip(robot_positions, j1_degs)
+        ],
+        dtype=np.float64,
+    )
+    kabsch_r_end, _, singular_values = _fit_rigid_translation_model(
         marker_vectors_camera,
-        marker_offsets_from_end_base,
+        marker_offsets_from_end,
         minimum_observability_ratio,
     )
 
-    # Two independent rotation estimates:
-    # 1) PnP-average: board orientation baseline, but inherits any error in the
-    #    probed marker rotation (probe Z noise tilts the board frame).
-    # 2) Kabsch: pure robot-translation fit, independent of probe orientation,
-    #    reliable once the XYZ lattice span is large.
-    # Pick whichever explains the samples better.
+    # PnP path: R_base_cam = Rz(J1) @ R_ec  =>  R_ec = Rz(-J1) @ R_base_cam
     marker_rotations_camera = [rotation_from_sample(sample) for sample in samples]
-    pnp_r_base = _project_to_rotation(
-        marker_r_base @ marker_r_camera.T
-        for marker_r_camera in marker_rotations_camera
+    pnp_r_end = _project_to_rotation(
+        rot_z(-j1) @ (marker_r_base @ marker_r_camera.T)
+        for j1, marker_r_camera in zip(j1_degs, marker_rotations_camera)
     )
 
     def _solve(rotation: np.ndarray):
         translation = np.mean(
-            marker_offsets_from_end_base - (rotation @ marker_vectors_camera.T).T,
+            marker_offsets_from_end - (rotation @ marker_vectors_camera.T).T,
             axis=0,
         )
         residuals = [
             float(
                 np.linalg.norm(
-                    robot_position + translation + rotation @ marker_t_camera
+                    tcp
+                    + rot_z(j1) @ (translation + rotation @ marker_t_camera)
                     - marker_t_base
                 )
             )
-            for robot_position, marker_t_camera in zip(
-                robot_positions, marker_vectors_camera
+            for tcp, j1, marker_t_camera in zip(
+                robot_positions, j1_degs, marker_vectors_camera
             )
         ]
         return translation, residuals
 
-    pnp_t_end, pnp_residuals = _solve(pnp_r_base)
-    kabsch_t_end, kabsch_residuals = _solve(kabsch_r_base)
+    pnp_t_end, pnp_residuals = _solve(pnp_r_end)
+    kabsch_t_end, kabsch_residuals = _solve(kabsch_r_end)
     if np.mean(kabsch_residuals) < np.mean(pnp_residuals):
-        camera_r_base, camera_t_end, residuals = (
-            kabsch_r_base,
+        camera_r_end, camera_t_end, residuals = (
+            kabsch_r_end,
             kabsch_t_end,
             kabsch_residuals,
         )
     else:
-        camera_r_base, camera_t_end, residuals = pnp_r_base, pnp_t_end, pnp_residuals
+        camera_r_end, camera_t_end, residuals = pnp_r_end, pnp_t_end, pnp_residuals
 
-    transform = make_transform(camera_r_base, camera_t_end)
-    rotation_delta = pnp_r_base.T @ kabsch_r_base
+    transform = make_transform(camera_r_end, camera_t_end)
+    rotation_delta = pnp_r_end.T @ kabsch_r_end
     rotation_crosscheck_error_deg = float(
         np.degrees(
             np.arccos(np.clip((np.trace(rotation_delta) - 1.0) / 2.0, -1.0, 1.0))
