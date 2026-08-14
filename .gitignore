@@ -26,7 +26,12 @@ MG400stimulation/MG400simulation-git-latest-ghproxy/
 new_vlm_agent/workspace/
 Vlm agent/Debugging-agent-v2/workspace/
 Vlm agent/Debugging-agent-v2/data/cases/case-*/
-data/cases/case-*/
+# Ignore local case payloads by default; keep two demo cases tracked.
+data/cases/*
+!data/cases/case-001/
+!data/cases/case-001/**
+!data/cases/case-500/
+!data/cases/case-500/**
 data/robot_pose_log.md
 **/__pycache__/
 **/.pytest_cache/

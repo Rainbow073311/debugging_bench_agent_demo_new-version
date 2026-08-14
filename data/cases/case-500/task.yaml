@@ -1,0 +1,16 @@
+question: |
+  执行统一的板框/孔位测点定位流程：根据 `user_measurement_question` 与原理图确定目标 TP，并严格按 `target_board_side` 选择位号图页面和实物照片。`front` 只使用 Top/Front 位号图与 `front_board_photo`；`back` 只使用 Bottom/Back 位号图与 `back_board_photo`；`auto` 先判断板面再锁定对应照片。随后统一使用 PCB 板框和安装孔/工艺孔配准，将目标映射到所选实物照片并生成 Step08。最大 IC 与 IC-anchor 代码只保留兼容性，本流程禁止调用。
+inputs:
+  user_measurement_question: |
+    检测6432芯片的3.3V IO support 电压
+  schematic_pdf: "PROC117B(002_AWR)_Sch.PDF"
+  assembly_drawing_pdf: "PROC117B(002_AWR)_Assy.PDF"
+  front_board_photo: "close_20260813_114017_201053_3.jpg"
+  target_board_side: "auto"
+  board_id: "case-500"
+  engineer_note: |
+    Operator: demo-user
+    Target board side: auto
+    Mapping: use PCB outline plus mounting/tooling-hole registration on the photo selected by target_board_side.
+    IC detection/IC-anchor code is retained for compatibility but must not be called.
+    Gen by Inputdemo. PDF->asm_pdf, IMG->asm_fb.
