@@ -1,7 +1,7 @@
 # PCBA Debugging Bench — 架构与 Workflow（2026-08）
 
 > 基于当前仓库真实代码整理：Inputdemo 编排、VLM Agent、J1 眼在手标定、ultra TP 精修、tip_offset。
-> 共 **8** 张 Mermaid 图。旧版六月文档见 `真实架构与流程-基于当前代码.md`（部分内容已过时，以本文为准）。
+> 共 **8** 张 Mermaid 图。本文为当前架构说明的权威文档。
 
 ---
 
