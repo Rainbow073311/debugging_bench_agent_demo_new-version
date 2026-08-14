@@ -5,7 +5,7 @@ inputs:
     检测6432芯片的3.3V IO support 电压
   schematic_pdf: "PROC117B(002_AWR)_Sch.PDF"
   assembly_drawing_pdf: "PROC117B(002_AWR)_Assy.PDF"
-  front_board_photo: "close_20260804_112930_718544_1.jpg"
+  front_board_photo: "close_20260813_165958_373263_2.jpg"
   target_board_side: "auto"
   board_id: "case-001"
   engineer_note: |

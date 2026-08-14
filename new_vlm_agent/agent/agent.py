@@ -1222,6 +1222,31 @@ class Agent:
                 allowed_tools=["search_pdf_text", "mark_tp_on_assembly_from_pdf_hit", "pdf_page_to_image", "view_image", "run_python"],
             ),
             WorkflowPlanStep(
+                step_id="partback_vlm_landmarks",
+                title=f"Optional {normalized}-side PCB-edge opening validation",
+                objective=(
+                    f"Compare the marked locator with INPUT_PATHS.{photo_key}. Inspect only PCB-edge "
+                    "mounting/tooling holes or cutouts. Record zero matches when ambiguous, or at "
+                    "least two high-confidence pairs. These landmarks validate the fixed PCB frame; "
+                    "they must not rotate, mirror, or replace its homography."
+                ),
+                done_any_artifacts=[
+                    "debug/back_02_edge_hole_candidates.json",
+                    "debug/back_02_vlm_edge_hole_candidate_sheet.png",
+                    "debug/back_03_vlm_edge_hole_review.json",
+                ],
+                allowed_tools=[
+                    "prepare_back_board_landmark_candidates",
+                    "view_image",
+                    "record_back_landmark_review",
+                ],
+                next_action_hint=(
+                    "Call prepare_back_board_landmark_candidates with "
+                    f"back_board_path=INPUT_PATHS.{photo_key}. Record only reliable PCB-edge "
+                    "mechanical-opening pairs, or matches=[] so registration keeps the fixed outline."
+                ),
+            ),
+            WorkflowPlanStep(
                 step_id="partback_board_registration",
                 title=f"{normalized.capitalize()} board outline and hole registration",
                 objective=(
